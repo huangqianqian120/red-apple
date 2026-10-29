@@ -67,8 +67,9 @@ sidecar/main.go               行 JSON：search/series/episodes/playback/discove
 1. **玻璃只用在浮层**（搜索框、播放器控件、弹层）。白底上铺玻璃会糊；
    播放器里玻璃要 tint 黑 18–42%，否则亮画面上白字不可读。
 2. **图标必须透明底**，图形占 ~86%：macOS 26 Dock 会自己垫玻璃托盘，再叠白底变双层。
-3. **图标放大小心 alpha**：ffmpeg 缩放会把透明压成黑块，必须走 CoreImage
-   （`CILanczosScaleTransform` + `CISharpenLuminance`），见 `Scripts/make-icon.swift`。
+3. **图标源是 SVG**（`Resources/AppIcon-source.svg`）：`make-icon.swift` 用 NSImage 的
+   SVG rep 按 1024 矢量光栅化，边缘干净。位图源才走 CoreImage Lanczos + 锐化
+   （ffmpeg 缩放会把透明压成黑块，不能用）。
 4. **SwiftPM 资源包要手动搬**：`$bin/*.bundle` 不拷进 `Contents/Resources/`，
    `Bundle.module` 在 .app 里找不到 `AppMark.png`。
 5. **`qlmanage -t` 会卡死**（120s 超时），验图标用 `sips -s format png AppIcon.icns --out /tmp/x.png`。

@@ -1,7 +1,10 @@
 #!/usr/bin/env swift
-// 把一张方形 PNG 做成 macOS App 图标母版（1024×1024 PNG，透明底）。
+// 把一张方形图片做成 macOS App 图标母版（1024×1024 PNG，透明底）。
 //
-//   swift Scripts/make-icon.swift <源图.png> <输出.png> [--panel]
+//   swift Scripts/make-icon.swift <源图.png|.svg> <输出.png> [--panel]
+//
+// 源图是 .svg 时会先按 1024 矢量光栅化（NSImage 支持 SVG rep），不走放大滤镜，
+// 边缘干净、没有锯齿；位图源才用 Lanczos 放大。
 //
 // 默认输出透明背景，只把图形放大居中——Dock 里就是图形本身，没有底板。
 // 加 --panel 才画 Apple 那套白色圆角底板（想要「卡片感」时用）。
@@ -25,10 +28,49 @@ let wantsPanel = args.contains("--panel")
 let canvas = 1024
 let canvasSide = CGFloat(canvas)
 
-guard let sourceImage = NSImage(contentsOfFile: sourcePath),
-      let sourceCG = sourceImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+guard let sourceImage = NSImage(contentsOf: URL(fileURLWithPath: sourcePath)) else {
     FileHandle.standardError.write("读不到源图: \(sourcePath)\n".data(using: .utf8)!)
     exit(1)
+}
+
+let isVector = sourcePath.lowercased().hasSuffix(".svg")
+
+/// 把矢量图按目标尺寸直接光栅化（保持清晰度），位图源不需要这步。
+func rasterize(_ image: NSImage, to side: CGFloat) -> CGImage? {
+    let pixels = Int(side.rounded())
+    guard let rep = NSBitmapImageRep(
+        bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels,
+        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+    ) else { return nil }
+    rep.size = NSSize(width: side, height: side)
+
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    if let c = NSGraphicsContext.current?.cgContext {
+        c.setShouldAntialias(true)
+        c.interpolationQuality = .high
+        c.clear(CGRect(x: 0, y: 0, width: side, height: side))
+    }
+    image.draw(in: CGRect(x: 0, y: 0, width: side, height: side),
+               from: .zero, operation: .sourceOver, fraction: 1)
+    NSGraphicsContext.restoreGraphicsState()
+    return rep.cgImage
+}
+
+let sourceCG: CGImage
+if isVector {
+    guard let rendered = rasterize(sourceImage, to: canvasSide) else {
+        FileHandle.standardError.write("SVG 光栅化失败: \(sourcePath)\n".data(using: .utf8)!)
+        exit(1)
+    }
+    sourceCG = rendered
+} else {
+    guard let bitmap = sourceImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        FileHandle.standardError.write("读不到源图: \(sourcePath)\n".data(using: .utf8)!)
+        exit(1)
+    }
+    sourceCG = bitmap
 }
 
 // MARK: 1. 高质量放大源图

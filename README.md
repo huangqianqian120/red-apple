@@ -51,10 +51,10 @@
 仓库里已经放好 `LICENSE`（MIT）、`NOTICE`、`LICENSES/Apache-2.0.txt`，
 README 顶部有免责声明。真要推到 GitHub 之前，还有几件事必须人工处理：
 
-1. **替换图标素材**。`Resources/AppIcon-source.png` / `AppIcon-1024.png` /
-   `Sources/HongguoPlayerKit/Resources/AppMark.png` 是从系统 emoji 图像派生的，
-   Apple 的 emoji 美术资源不可随仓库分发。换成自己画的图形，或开源时把这三个文件
-   从仓库移除（`make-icon.swift` 留着，让别人用自己的素材生成）。
+1. **确认图标授权**。`Resources/AppIcon-source.svg` 来自 iconfont.cn 的第三方图标，
+   版权归上传者；放进公开仓库属于再分发，请回原页面确认它标注的许可（可商用 /
+   需署名），或者自己重画一个再替换（图形很简单：圆 + 叶柄 + 笑脸弧）。
+   `AppIcon-1024.png` 与 `AppMark.png` 都是它的衍生物，同源同许可。
 2. **别提交 `sidecar/go.mod` 里的 `replace` 行**。`build-sidecar.sh` 每次构建都会把
    它改写成本机绝对路径（`/Users/xxx/Projects/openhongguo`），换机器就废了。
 3. **确认本机状态没进版本库**：`anonymous.json`（设备凭据）、`progress.json`、
@@ -216,11 +216,14 @@ Resources/AppIcon-1024.png        App 图标母版（Scripts/make-icon.swift 生
 - 播放器控件在亮画面上会看不清，所以玻璃面板统一染 18% 黑，白字仍加投影兜底。
 - 榜单名次按返回顺序自己数：上游 `rank` 字段会重复（两条都是 1）。
 
-图标由 `Scripts/make-icon.swift` 从 `Resources/AppIcon-source.png` 生成：
+图标源是 `Resources/AppIcon-source.svg`（矢量，1024 的 viewBox）。`make-icon.swift`
+遇到 `.svg` 会先按目标尺寸矢量光栅化、再裁透明边居中，边缘没有放大糊边；
+位图源才走 CoreImage Lanczos + 锐化那条路。
 
 ```sh
-# 裁掉透明边 → CoreImage Lanczos 放大 + 轻度锐化 → 1024 透明底母版
-swift Scripts/make-icon.swift Resources/AppIcon-source.png Resources/AppIcon-1024.png
+# SVG → 1024 透明底母版 → 侧栏品牌图（256）
+swift Scripts/make-icon.swift Resources/AppIcon-source.svg Resources/AppIcon-1024.png
+sips -z 256 256 Resources/AppIcon-1024.png --out Sources/HongguoPlayerKit/Resources/AppMark.png
 # 加 --panel 才会画 Apple 那套白色圆角底板
 ./Scripts/make-app.sh release     # 顺带切 iconset、生成 AppIcon.icns
 ```
