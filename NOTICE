@@ -1,0 +1,36 @@
+RED APPLE（红果短剧 macOS 播放器）
+Copyright 2026 huangqianqian120
+
+This product depends on the following third-party software.
+
+--------------------------------------------------------------------------------
+openhongguo
+https://github.com/beilunyang/openhongguo
+License: Apache License 2.0 (see LICENSES/Apache-2.0.txt)
+
+Used as a Go module dependency by sidecar/go.mod. The upstream source is NOT
+modified: this project only imports its packages and calls the exported API
+(anonymous device registration, request signing, catalog queries, playback
+resolution). The Apache-2.0 license of the upstream project does not grant any
+right to circumvent technical protection measures (see the disclaimer in
+README.md).
+
+Upstream changes made by this project: none. Changes made to the interface
+around it: sidecar/main.go wraps it with a line-delimited JSON protocol.
+--------------------------------------------------------------------------------
+
+ffmpeg
+https://ffmpeg.org
+
+ffmpeg is NOT distributed with this repository or with the packaged app. The
+app locates an ffmpeg binary that the user has installed (PATH, /opt/homebrew,
+/usr/local, /opt/local). Any ffmpeg build you install carries its own license
+(Homebrew's build is GPL-3.0; other builds vary between LGPL-2.1+ and GPL-3.0),
+and redistributing it requires complying with that license, including offering
+the corresponding source.
+
+--------------------------------------------------------------------------------
+
+Apple frameworks (AppKit, SwiftUI, AVFoundation, CoreImage, Foundation) are
+provided by macOS and are used under the terms of the macOS SDK license.
+--------------------------------------------------------------------------------

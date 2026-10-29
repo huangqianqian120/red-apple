@@ -5,3 +5,11 @@ build/
 .DS_Store
 # sidecar 的依赖被 replace 到本地 SDK 路径，换机器要重跑 build-sidecar.sh
 sidecar/go.sum
+
+# 本机运行状态（绝对不能进仓库：设备凭据 / 进度 / 解密缓存）
+anonymous.json
+progress.json
+*.mp4
+*.m4s
+*.ts
+ffmpeg.log
