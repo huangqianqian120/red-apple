@@ -2,7 +2,7 @@
 
 ![license](https://img.shields.io/badge/license-MIT-blue)
 
-![Uploading 截屏2026-10-29 17.08.11.png…]()
+![RED APPLE 界面](docs/screenshot.jpg)
 
 基于 [`openhongguo`](https://github.com/beilunyang/openhongguo) SDK 的 macOS 桌面短剧播放器。
 竖屏刷剧、上下滑切集、自动连播、进度记忆、倍速与清晰度切换。
