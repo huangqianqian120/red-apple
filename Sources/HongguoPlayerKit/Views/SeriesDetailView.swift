@@ -84,7 +84,7 @@ struct SeriesDetailView: View {
                         )
                     } label: {
                         Label(
-                            resumeEpisodeNumber == nil ? "从第 1 集开始" : "继续第 \(resumeEpisodeNumber!) 集",
+                            primaryTitle,
                             systemImage: "play.fill"
                         )
                         .font(.system(size: 12, weight: .medium))
@@ -97,18 +97,22 @@ struct SeriesDetailView: View {
                     .pressableScale()
                     .keyboardShortcut(.return, modifiers: [])
 
-                    Button {
-                        app.play(seriesID: info.id, title: info.title, episodeNumber: 1)
-                    } label: {
-                        Text("从第 1 集")
-                            .font(.system(size: 12))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .foregroundStyle(Theme.ink)
-                            .background(Theme.hover, in: Capsule())
+                    // 只有在「能接着看」的时候才给第二个入口。
+                    // 否则两个按钮都指向第 1 集，纯属重复。
+                    if let resume = resumeEpisodeNumber, resume > 1 {
+                        Button {
+                            app.play(seriesID: info.id, title: info.title, episodeNumber: 1)
+                        } label: {
+                            Text("从头看")
+                                .font(.system(size: 12))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .foregroundStyle(Theme.ink)
+                                .background(Theme.hover, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .pressableScale()
                     }
-                    .buttonStyle(.plain)
-                    .pressableScale()
                 }
                 .padding(.top, 4)
             }
@@ -116,8 +120,15 @@ struct SeriesDetailView: View {
         }
     }
 
+    /// 续播的那一集。看完一集就往后顺延一集；
+    /// 没看过（或已经追到大结局）返回 nil，此时主按钮就是「从第 1 集开始」。
     private var resumeEpisodeNumber: Int? {
-        guard let resume = app.progress(for: seriesID), !resume.isFinished else { return nil }
+        guard let resume = app.progress(for: seriesID) else { return nil }
+        if resume.isFinished {
+            let next = resume.episodeNumber + 1
+            if !episodes.isEmpty, next > episodes.count { return nil }
+            return next
+        }
         return resume.episodeNumber
     }
 
@@ -164,6 +175,11 @@ struct SeriesDetailView: View {
 
     /// 接口给的 tags 里已经夹着「全1000集」「红果热度值 5442 万」，
     /// 直接再补一遍会出现两套说法，所以先按语义去重再拼。
+    private var primaryTitle: String {
+        guard let number = resumeEpisodeNumber else { return "从第 1 集开始" }
+        return number == 1 ? "播放第 1 集" : "继续第 \(number) 集"
+    }
+
     private func detailTags(_ info: SeriesInfo) -> [String] {
         let hasEpisodeTag = info.tags.contains { $0.contains("集") }
         let hasHeatTag = info.tags.contains { $0.contains("热度") }

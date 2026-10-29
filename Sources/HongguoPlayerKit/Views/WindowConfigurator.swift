@@ -34,4 +34,18 @@ extension View {
             .frame(width: 0, height: 0)
         )
     }
+
+    /// 播放时把窗口底色切成黑，退出播放再切回系统底色。
+    ///
+    /// 标题栏本身是常驻隐藏的（见 HongguoPlayerApp 的 `.windowStyle(.hiddenTitleBar)`），
+    /// 平时由 RootView 的顶部留白把红绿灯让开；播放时画面直接顶到窗口上沿。
+    func playerChrome(_ playing: Bool) -> some View {
+        background(
+            WindowConfigurator { window in
+                window.backgroundColor = playing ? .black : .windowBackgroundColor
+                window.titlebarSeparatorStyle = playing ? .none : .automatic
+            }
+            .frame(width: 0, height: 0)
+        )
+    }
 }

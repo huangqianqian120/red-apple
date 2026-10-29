@@ -26,7 +26,6 @@ struct PlayerSurface: NSViewRepresentable {
 /// 播放器界面：画面全幅，控件是浮在上面的玻璃层。
 struct PlayerView: View {
     @EnvironmentObject private var app: AppModel
-    @Environment(\.dismissWindow) private var dismissWindow
     @ObservedObject var controller: PlaybackController
 
     @State private var showsControls = true
@@ -34,9 +33,6 @@ struct PlayerView: View {
     @State private var scrubbing: Double?
     @State private var showsEpisodes = false
     @State private var dragOffset: CGFloat = 0
-    @State private var fittedAspect: CGFloat?
-    /// 横屏剧自动铺满屏幕。可在「显示」菜单里关掉。
-    @AppStorage("autoFitLandscape") private var autoFitLandscape = true
 
     var body: some View {
         ZStack {
@@ -86,62 +82,9 @@ struct PlayerView: View {
                 window.toggleFullScreen(nil)
             } else {
                 app.closePlayer()
-                dismissWindow()
             }
             return .handled
         }
-        .background(
-            WindowConfigurator { window in
-                let raw = controller.videoAspectRatio
-                    ?? (controller.isVertical ? 9.0 / 16.0 : 16.0 / 9.0)
-                let aspect = (raw * 10).rounded() / 10
-                guard fittedAspect != aspect else { return }
-                DispatchQueue.main.async {
-                    guard fittedAspect != aspect else { return }
-                    fittedAspect = aspect
-                    // 横屏铺满屏幕（16:9 内接矩形）。
-                    //
-                    // 刻意不调用 toggleFullScreen：原生全屏会把窗口搬到一个新的
-                    // Space 并抢焦点，从命令行/后台启动时系统不会切过去，
-                    // 用户看到的是「窗口消失了」。需要真全屏时点右上角 ⤢。
-                    if aspect >= 1.4, autoFitLandscape {
-                        if let screen = window.screen ?? NSScreen.main {
-                            let visible = screen.visibleFrame
-                            let chrome = window.frame.height - window.contentLayoutRect.height
-                            let margin: CGFloat = 24
-                            var width = visible.width - margin * 2
-                            var height = width / aspect
-                            if height > visible.height - margin * 2 - chrome {
-                                height = visible.height - margin * 2 - chrome
-                                width = height * aspect
-                            }
-                            window.setFrame(
-                                NSRect(
-                                    x: visible.midX - width / 2,
-                                    y: visible.midY - (height + chrome) / 2,
-                                    width: width, height: height + chrome
-                                ),
-                                display: true, animate: false
-                            )
-                            window.makeKeyAndOrderFront(nil)
-                        }
-                        return
-                    }
-                    var frame = window.frame
-                    let contentHeight = max(window.contentLayoutRect.height, 520)
-                    let chrome = frame.height - window.contentLayoutRect.height
-                    let newWidth = (contentHeight * aspect).rounded()
-                    frame.size = NSSize(width: max(newWidth, 300), height: (contentHeight + chrome).rounded())
-                    if let screen = window.screen ?? NSScreen.main {
-                        let visible = screen.visibleFrame
-                        if frame.maxX > visible.maxX { frame.origin.x = visible.maxX - frame.width }
-                        if frame.minX < visible.minX { frame.origin.x = visible.minX }
-                        if frame.maxY > visible.maxY { frame.origin.y = visible.maxY - frame.height }
-                    }
-                    window.setFrame(frame, display: true, animate: false)
-                }
-            }
-        )
         .onAppear { scheduleHide() }
         .onDisappear { hideTask?.cancel() }
         .onChange(of: controller.index) { _, _ in revealControls() }
@@ -151,12 +94,15 @@ struct PlayerView: View {
 
     private var video: some View {
         GeometryReader { geo in
+            // 竖屏剧按 9:16 居中，两侧留黑；横屏按真实画面比例内接，
+            // 都塞进窗口里，不去动窗口大小。
+            let aspect = max(controller.videoAspectRatio ?? (controller.isVertical ? 9.0 / 16.0 : 16.0 / 9.0), 0.2)
+            let boxWidth = min(geo.size.width, geo.size.height * aspect)
+            let boxHeight = boxWidth / aspect
+
             PlayerSurface(player: controller.player)
-                .frame(
-                    width: controller.isVertical ? min(geo.size.width, geo.size.height * 9 / 16) : geo.size.width,
-                    height: controller.isVertical ? min(geo.size.height, geo.size.width * 16 / 9) : geo.size.width * 9 / 16
-                )
-                .clipShape(RoundedRectangle(cornerRadius: controller.isVertical ? 16 : 0, style: .continuous))
+                .frame(width: boxWidth, height: boxHeight)
+                .clipShape(RoundedRectangle(cornerRadius: controller.isVertical ? 16 : 6, style: .continuous))
                 .offset(y: dragOffset * 0.15)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -172,7 +118,7 @@ struct PlayerView: View {
         }
         .foregroundStyle(.white)
         .padding(16)
-        .glassPanel(cornerRadius: 16)
+        .playerGlass(radius: 16)
         .transition(.opacity)
     }
 
@@ -204,9 +150,8 @@ struct PlayerView: View {
 
     private var topBar: some View {
         HStack(spacing: 10) {
-            GlassIconButton(system: "chevron.left", label: "关闭播放窗口（Esc）") {
+            GlassIconButton(system: "chevron.left", label: "回到列表（Esc）") {
                 app.closePlayer()
-                dismissWindow()
             }
 
             VStack(alignment: .leading, spacing: 1) {
@@ -233,7 +178,7 @@ struct PlayerView: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 11)
             .padding(.vertical, 6)
-            .glassPanel(cornerRadius: 13, tint: .black.opacity(0.18))
+            .playerGlass(radius: 13)
 
             Spacer()
 
@@ -381,7 +326,7 @@ struct PlayerView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
-        .glassPanel(cornerRadius: 18, tint: .black.opacity(0.18))
+        .playerGlass(radius: 18)
     }
 
     private var episodeList: some View {
@@ -430,7 +375,7 @@ struct PlayerView: View {
                     .foregroundStyle(.white.opacity(0.65))
             }
             .padding(18)
-            .glassPanel(cornerRadius: 18)
+            .playerGlass(radius: 18)
         }
     }
 
@@ -462,7 +407,7 @@ struct PlayerView: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .glassPanel(cornerRadius: 20, interactive: true)
+                        .playerGlass(radius: 20, interactive: true)
                 }
                 Button("下一集") { controller.next() }
                     .buttonStyle(.plain)
@@ -472,7 +417,7 @@ struct PlayerView: View {
             }
         }
         .padding(18)
-        .glassPanel(cornerRadius: 18)
+        .playerGlass(radius: 18)
     }
 
     private var failureMessage: String {
@@ -511,7 +456,7 @@ struct GlassIconButton: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.white)
                 .frame(width: 30, height: 30)
-                .glassPanel(cornerRadius: 15, tint: .black.opacity(0.2), interactive: true)
+                .playerGlass(radius: 15, interactive: true)
         }
         .buttonStyle(.plain)
         .disabled(disabled)
@@ -536,7 +481,7 @@ struct TextButton: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 11)
             .padding(.vertical, 7)
-            .glassPanel(cornerRadius: 15, tint: .black.opacity(0.2), interactive: true)
+            .playerGlass(radius: 15, interactive: true)
         }
         .buttonStyle(.plain)
         .pressableScale()
@@ -558,7 +503,7 @@ struct GlassMenuLabel<Content: View>: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 11)
                 .padding(.vertical, 7)
-                .glassPanel(cornerRadius: 15, tint: .black.opacity(0.2), interactive: true)
+                .playerGlass(radius: 15, interactive: true)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)

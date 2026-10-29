@@ -208,3 +208,36 @@ public struct AppMark: View {
         return nil
     }()
 }
+
+// MARK: - 播放器玻璃
+
+/// 播放器专用玻璃层：素材画面明暗不可控，纯 `glassEffect` 在白色画面上会被
+/// 反照成浅灰，白字直接糊掉。这里先用模糊材质打底、再叠一层 42% 黑纱，
+/// 保证任何画面上都是深色底，同时保留玻璃的高光描边。
+public struct PlayerGlass: ViewModifier {
+    var radius: CGFloat
+    var interactive: Bool
+
+    public func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(.black.opacity(0.42))
+                    .background(
+                        .ultraThinMaterial,
+                        in: RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: radius, style: .continuous)
+                            .strokeBorder(.white.opacity(0.14), lineWidth: 0.75)
+                    )
+                    .allowsHitTesting(interactive)
+            }
+    }
+}
+
+extension View {
+    public func playerGlass(radius: CGFloat, interactive: Bool = false) -> some View {
+        modifier(PlayerGlass(radius: radius, interactive: interactive))
+    }
+}

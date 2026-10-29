@@ -159,6 +159,8 @@ public final class AppModel: ObservableObject {
 
     /// 打开播放窗口的动作。RootView 拿到 openWindow 后注入，
     /// 这样菜单、详情页、继续观看都能用同一个入口。
+    /// 预留钩子：播放器现在内嵌在主窗口里，靠 `presented` 驱动，
+    /// 不再需要「打开播放窗口」的闭包。留着是为了不破坏调用点。
     public var openPlayerWindow: (@MainActor () -> Void)?
 
     /// 冒烟测试用：HONGGUO_OPEN_FILE=/path/to/clip.mp4 启动时直接进播放器。

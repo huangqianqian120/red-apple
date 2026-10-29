@@ -3,25 +3,46 @@ import SwiftUI
 /// 主窗口：左侧 Notion 式侧栏，右侧内容栈，播放时另开窗口。
 public struct RootView: View {
     @EnvironmentObject private var app: AppModel
-    @Environment(\.openWindow) private var openWindow
     @State private var selection: AppModel.Section? = .discover
 
     public init() {}
 
     public var body: some View {
-        HStack(spacing: 0) {
-            Sidebar(selection: $selection)
-                .frame(width: 236)
-            Rectangle()
-                .fill(Theme.hairline)
-                .frame(width: 1)
-                .ignoresSafeArea()
-            detail
+        ZStack {
+            HStack(spacing: 0) {
+                Sidebar(selection: $selection)
+                    .frame(width: 236)
+                Rectangle()
+                    .fill(Theme.hairline)
+                    .frame(width: 1)
+                    .ignoresSafeArea()
+                detail
+            }
+
+            // 播放器就在这个窗口里，盖住侧栏和列表。
+            // 单窗口的好处：切集、返回列表都不会有窗口跳来跳去。
+            if app.presented != nil {
+                PlayerView(controller: app.playback)
+                    .transition(.opacity)
+                    .zIndex(1)
+            }
         }
+        // 无标题栏窗口里红绿灯浮在内容上；非播放时留一条安全带，
+        // 左右两半分别取侧栏灰和画布白，跟下面的版面对齐。
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if app.presented == nil {
+                HStack(spacing: 0) {
+                    Theme.surface.frame(width: 236)
+                    Theme.canvas
+                }
+                .frame(height: 28)
+            }
+        }
+        .animation(.easeOut(duration: 0.16), value: app.presented != nil)
+        .playerChrome(app.presented != nil)
         .background(Theme.canvas)
         .frame(minWidth: 900, minHeight: 600)
         .task {
-            app.openPlayerWindow = { openWindow(id: "player") }
             app.sectionIfRequested()
             selection = app.section
             app.openSeriesIfRequested()

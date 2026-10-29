@@ -3,7 +3,6 @@ import SwiftUI
 /// App 入口。真正的 main 在可执行 target 的 main.swift 里。
 public struct HongguoPlayerApp: App {
     @StateObject private var app = AppModel()
-    @AppStorage("autoFitLandscape") private var autoFitLandscape = true
 
     public init() {}
 
@@ -15,28 +14,20 @@ public struct HongguoPlayerApp: App {
                 .preferredColorScheme(.light)
         }
         .defaultSize(width: 1180, height: 800)
-        .windowToolbarStyle(.unifiedCompact)
+        // 常驻无标题栏：播放时画面要铺到最顶。
+        // 平时靠 RootView 的 28pt 顶部留白把红绿灯让出来。
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("打开视频文件…") { app.openLocalFile() }
                     .keyboardShortcut("o")
             }
             CommandGroup(after: .sidebar) {
-                Toggle("横屏剧自动铺满屏幕", isOn: $autoFitLandscape)
                 Button("清理解密缓存") { app.clearMediaCache() }
                 Divider()
                 Button("返回片库") { app.path.removeAll() }
                     .keyboardShortcut("[", modifiers: .command)
             }
         }
-
-        // 播放窗口：单实例（Window 而不是 WindowGroup），无标题栏，
-        // 竖屏 9:16 的默认尺寸，可以随手拉成全屏。
-        Window("播放", id: "player") {
-            PlayerWindowView()
-                .environmentObject(app)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .defaultSize(width: 460, height: 820)
     }
 }
