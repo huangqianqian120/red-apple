@@ -16,6 +16,18 @@ public final class AppModel: ObservableObject {
 
         public var id: String { rawValue }
 
+        /// 环境变量里用小写英文名，避免 shell 里传中文。
+        init?(envName: String) {
+            switch envName.lowercased() {
+            case "feed", "刷剧": self = .feed
+            case "discover", "推荐": self = .discover
+            case "rank", "短剧榜": self = .rank
+            case "search", "搜索": self = .search
+            case "continue", "continuing", "继续观看": self = .continuing
+            default: return nil
+            }
+        }
+
         public var systemImage: String {
             switch self {
             case .feed: return "play.rectangle.on.rectangle"
@@ -171,6 +183,25 @@ public final class AppModel: ObservableObject {
         let seriesID = String(parts[0])
         let episode = parts.count > 1 ? Int(parts[1]) : nil
         play(seriesID: seriesID, title: seriesID, episodeNumber: episode)
+    }
+
+    /// 冒烟测试/深链接：HONGGUO_SECTION=feed|discover|rank|search|continue
+    /// 直接切到某一页；配合 HONGGUO_OPEN_SERIES=<id> 还能压进详情页。
+    /// 不传就正常从「推荐」开始。
+    public func sectionIfRequested() {
+        let env = ProcessInfo.processInfo.environment
+        if let raw = env["HONGGUO_SECTION"], !raw.isEmpty,
+           let target = Section(rawValue: raw) ?? Section(envName: raw) {
+            section = target
+        }
+    }
+
+    /// 深链接：HONGGUO_OPEN_SERIES=<id> 启动即打开详情页。
+    /// 必须晚于 section 同步调用——切 section 会清空导航栈。
+    public func openSeriesIfRequested() {
+        guard let seriesID = ProcessInfo.processInfo.environment["HONGGUO_OPEN_SERIES"],
+              !seriesID.isEmpty else { return }
+        path.append(seriesID)
     }
 
     /// 冒烟测试/深链接：HONGGUO_FEED=<频道> 启动即进无限流。

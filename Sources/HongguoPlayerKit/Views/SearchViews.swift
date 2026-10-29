@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 搜索页：输入关键词，回车搜索，结果网格。
+/// 搜索页：顶部玻璃搜索框 + 结果网格。
 struct SearchView: View {
     @EnvironmentObject private var app: AppModel
     @State private var query = ""
@@ -8,59 +8,111 @@ struct SearchView: View {
     @State private var error: String?
     @State private var isLoading = false
     @State private var hasSearched = false
+    @State private var popular: [SeriesSummary] = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("搜索短剧、演员、题材", text: $query)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 14))
-                    .onSubmit { Task { await search() } }
-                if isLoading { ProgressView().controlSize(.small) }
-                if !query.isEmpty {
-                    Button {
-                        query = ""
-                        results = []
-                        hasSearched = false
-                    } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Space.section) {
+                PageHeader(title: "搜索", subtitle: "剧名、演员、题材都能搜") { EmptyView() }
+
+                searchField
+
+                if let error {
+                    ErrorBox(message: error) { Task { await search() } }
                 }
-            }
-            .padding(10)
-            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 9))
 
-            if let error {
-                ErrorBox(message: error) { Task { await search() } }
-            }
-
-            ScrollView {
                 if results.isEmpty {
                     if hasSearched && !isLoading {
-                        ContentUnavailableView.search(text: query)
-                            .padding(.top, 50)
+                        EmptyState(
+                            icon: "magnifyingglass",
+                            title: "没有找到「\(query)」",
+                            detail: "换个关键词试试，或者看看下面的热门标签。"
+                        )
                     } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("试试这些").font(.system(size: 12)).foregroundStyle(.secondary)
-                            FlowChips(items: ["闪婚", "重生", "末世", "甜宠", "玄学", "复仇"]) { word in
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("试试这些")
+                                .font(Theme.caption(11))
+                                .foregroundStyle(Theme.inkTertiary)
+                            SuggestionChips(words: ["闪婚", "重生", "末世", "甜宠", "玄学", "复仇"]) { word in
                                 query = word
                                 Task { await search() }
                             }
                         }
-                        .padding(.top, 20)
+
+                        if !popular.isEmpty {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("大家都在看")
+                                    .font(Theme.heading(14))
+                                    .foregroundStyle(Theme.ink)
+                                    .padding(.top, 6)
+                                SeriesGrid(items: popular, progressFor: { app.progress(for: $0) }) { series in
+                                    app.path.append(series.id)
+                                }
+                            }
+                        }
                     }
                 } else {
                     SeriesGrid(items: results, progressFor: { app.progress(for: $0) }) { series in
                         app.path.append(series.id)
                     }
-                    .padding(.top, 4)
                 }
             }
+            .padding(.horizontal, 32)
+            .padding(.vertical, 26)
         }
-        .padding(20)
-        .navigationTitle("搜索")
+        .background(Theme.canvas)
+        .navigationTitle("")
+        .task { if popular.isEmpty { await loadPopular() } }
+    }
+
+    /// 空态不该是白纸：直接铺一屏热门，进来就能点。
+    private func loadPopular() async {
+        do {
+            let entries = try await app.catalog.shortRank()
+            popular = entries.prefix(10).map {
+                SeriesSummary(
+                    id: $0.seriesID, title: $0.title, coverURL: $0.coverURL,
+                    episodeCount: $0.episodeCount, author: $0.actor
+                )
+            }
+        } catch {
+            // 热门拉不到就不显示，不打断搜索本身。
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.inkTertiary)
+            TextField("搜索短剧", text: $query)
+                .textFieldStyle(.plain)
+                .font(Theme.body(12.5))
+                .foregroundStyle(Theme.ink)
+                .onSubmit { Task { await search() } }
+            if isLoading {
+                ProgressView().controlSize(.small)
+            } else if !query.isEmpty {
+                Button {
+                    query = ""
+                    results = []
+                    hasSearched = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.inkTertiary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: 380)
+        .glassPanel(cornerRadius: 11, interactive: true)
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(Theme.hairline, lineWidth: 0.75)
+        )
     }
 
     private func search() async {
@@ -79,7 +131,28 @@ struct SearchView: View {
     }
 }
 
-/// 短剧榜。
+struct SuggestionChips: View {
+    var words: [String]
+    var onTap: (String) -> Void
+
+    var body: some View {
+        HStack(spacing: 7) {
+            ForEach(words, id: \.self) { word in
+                Button(word) { onTap(word) }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.inkSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Theme.surface, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Theme.hairline, lineWidth: 0.75))
+                    .pressableScale()
+            }
+        }
+    }
+}
+
+/// 短剧榜：编号行列表。
 struct RankView: View {
     @EnvironmentObject private var app: AppModel
     @State private var entries: [RankEntry] = []
@@ -88,58 +161,41 @@ struct RankView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: Theme.Space.section) {
+                PageHeader(title: "短剧榜", subtitle: "红果短剧实时榜单") {
+                    if isLoading { ProgressView().controlSize(.small) }
+                }
+
                 if let error {
                     ErrorBox(message: error) { Task { await load() } }
                 }
+
                 if isLoading && entries.isEmpty {
-                    ProgressView().frame(maxWidth: .infinity).padding(.top, 60)
-                }
-                ForEach(entries) { entry in
-                    Button {
-                        if !entry.seriesID.isEmpty {
-                            app.path.append(entry.seriesID)
+                    VStack(spacing: 8) {
+                        ForEach(0..<6, id: \.self) { _ in
+                            RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+                                .fill(Theme.surface)
+                                .frame(height: 56)
                         }
-                    } label: {
-                        HStack(spacing: 12) {
-                            Text("\(entry.rank)")
-                                .font(.system(size: 15, weight: .bold, design: .rounded))
-                                .foregroundStyle(entry.rank <= 3 ? Color.orange : Color.secondary)
-                                .frame(width: 26, alignment: .trailing)
-                            CoverImage(url: entry.coverURL, title: entry.title)
-                                .frame(width: 40, height: 56)
-                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(entry.title).font(.system(size: 13, weight: .medium))
-                                HStack(spacing: 8) {
-                                    if !entry.score.isEmpty {
-                                        Text(entry.score).font(.system(size: 11)).foregroundStyle(.secondary)
-                                    }
-                                    if !entry.actor.isEmpty {
-                                        Text(entry.actor).font(.system(size: 11)).foregroundStyle(.secondary)
-                                    }
-                                    if entry.episodeCount > 0 {
-                                        Text("全 \(entry.episodeCount) 集").font(.system(size: 11)).foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                            Spacer()
-                            if !entry.seriesID.isEmpty {
-                                Image(systemName: "chevron.right").font(.system(size: 10)).foregroundStyle(.tertiary)
-                            }
-                        }
-                        .padding(8)
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .background(entry.rank <= 3 ? Color.orange.opacity(0.06) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                } else {
+                    VStack(spacing: 4) {
+                        ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                            RankRow(entry: entry, position: index + 1)
+                        }
+                    }
+                    .frame(maxWidth: 660, alignment: .leading)
                 }
             }
-            .padding(20)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 26)
         }
-        .navigationTitle("短剧榜")
+        .background(Theme.canvas)
+        .navigationTitle("")
         .task { if entries.isEmpty { await load() } }
     }
+
+    // 上游的 rank 字段会重复（两条都是 1），所以名次按返回顺序算。
 
     private func load() async {
         isLoading = true
@@ -153,18 +209,64 @@ struct RankView: View {
     }
 }
 
-/// 自动换行的小标签组。
-struct FlowChips: View {
-    var items: [String]
-    var onTap: (String) -> Void
+private struct RankRow: View {
+    @EnvironmentObject private var app: AppModel
+    var entry: RankEntry
+    var position: Int = 1
+
+    @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            ForEach(items, id: \.self) { item in
-                Button(item) { onTap(item) }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+        Button {
+            if !entry.seriesID.isEmpty { app.path.append(entry.seriesID) }
+        } label: {
+            HStack(spacing: 12) {
+                Text("\(position)")
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(position <= 3 ? Theme.accent : Theme.inkTertiary)
+                    .frame(width: 22, alignment: .trailing)
+
+                CoverImage(url: entry.coverURL, title: entry.title)
+                    .frame(width: 34, height: 48)
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .strokeBorder(Theme.hairline, lineWidth: 0.75)
+                    )
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.title)
+                        .font(Theme.body(12.5))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(1)
+                    HStack(spacing: 8) {
+                        if !entry.actor.isEmpty {
+                            Text(entry.actor).font(Theme.caption(10.5)).foregroundStyle(Theme.inkTertiary)
+                        }
+                        if !entry.score.isEmpty {
+                            Text(entry.score).font(Theme.caption(10.5)).foregroundStyle(Theme.inkTertiary)
+                        }
+                        if entry.episodeCount > 0 {
+                            Text("全 \(entry.episodeCount) 集").font(Theme.caption(10.5)).foregroundStyle(Theme.inkTertiary)
+                        }
+                    }
+                }
+                Spacer(minLength: 12)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.inkTertiary)
+                    .opacity(hovering ? 1 : 0)
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                    .fill(hovering ? Theme.hover : Color.clear)
+            )
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
     }
 }

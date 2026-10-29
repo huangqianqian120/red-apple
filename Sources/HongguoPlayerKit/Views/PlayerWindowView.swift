@@ -23,12 +23,14 @@ public struct PlayerWindowView: View {
                     systemImage: "play.slash",
                     description: Text("从片库或搜索页选一部短剧开始播放。")
                 )
+                .background(Theme.canvas)
             }
         }
         .ephemeralWindow()
         .frame(minWidth: 300, minHeight: 420)
         .background(Color.black)
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(.dark)   // 播放窗口浮层用深色玻璃
+        .tint(.white)
         .onAppear { Debug.log("PlayerWindow onAppear") }
         .task {
             // 启动时被状态恢复出来的空播放窗口：自己关掉，别留个死窗口。

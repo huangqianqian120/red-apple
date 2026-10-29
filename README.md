@@ -3,6 +3,9 @@
 基于 [`openhongguo`](https://github.com/beilunyang/openhongguo) SDK 的 macOS 桌面短剧播放器。
 竖屏刷剧、上下滑切集、自动连播、进度记忆、倍速与清晰度切换。
 
+界面走「白色极简 + 液体玻璃」：纯白画布、暖黑文字、圆角卡片，玻璃只出现在
+浮在内容之上的层级（搜索框、播放器控件、弹层），不当装饰用。
+
 > **仅供学习研究，禁止商用。** 本项目不含任何破解逻辑：签名、设备注册、内容密钥
 > 全部由上游 SDK 完成；这里只做「拿到地址和密钥之后怎么播」。
 
@@ -148,6 +151,7 @@ sidecar: resolvePlayback ──▶ 选清晰度 ──▶ MediaPlan（地址 + k
 
 ```
 Sources/HongguoPlayerKit/
+  Design/Theme.swift              设计系统：颜色/字号/圆角/间距 + 玻璃面板 + AppMark
   Model/Models.swift              自有数据模型（不依赖 SDK 类型）
   Services/CatalogService.swift   协议 + DemoCatalogService
   Services/SidecarCatalogService.swift  Go 子进程 + JSON 协议 + 健康检查
@@ -159,10 +163,32 @@ Sources/HongguoPlayerKit/
 Sources/HongguoPlayer/main.swift  入口
 Sources/SelfTest/                 无框架自测（本机没有 XCTest）
 sidecar/main.go                   Go 侧的 JSON 服务
+Resources/AppIcon-1024.png        App 图标母版（Scripts/make-icon.swift 生成）
 ```
 
 为什么不用 XCTest：这台机器只有 Command Line Tools，`import XCTest` 直接编译失败，
 `import testing` 同样没有。所以测试写成可执行 target，断言失败退出码 1。
+
+## 界面与图标
+
+- 侧栏 236pt 浅灰、内容区纯白；卡片 2:3 封面、悬停微放大并浮出播放键。
+- 搜索框、播放器控件、选集弹层用 Liquid Glass（`glassEffect`，macOS 26+），
+  其余层级一律实色——玻璃滥用在白色界面里会糊成一片。
+- 播放器控件在亮画面上会看不清，所以玻璃面板统一染 18% 黑，白字仍加投影兜底。
+- 榜单名次按返回顺序自己数：上游 `rank` 字段会重复（两条都是 1）。
+
+图标由 `Scripts/make-icon.swift` 从 `Resources/AppIcon-source.png` 生成：
+
+```sh
+# 裁掉透明边 → CoreImage Lanczos 放大 + 轻度锐化 → 1024 透明底母版
+swift Scripts/make-icon.swift Resources/AppIcon-source.png Resources/AppIcon-1024.png
+# 加 --panel 才会画 Apple 那套白色圆角底板
+./Scripts/make-app.sh release     # 顺带切 iconset、生成 AppIcon.icns
+```
+
+透明底是刻意的：macOS 26 的 Dock 会自己给图标铺一层玻璃托盘，图标自带白底
+反而会叠成「两层底」。侧栏左上角的品牌图形复用的是同一张图
+（`Sources/HongguoPlayerKit/Resources/AppMark.png`，走 SwiftPM 资源包）。
 
 ## 快捷键
 
@@ -181,7 +207,8 @@ sidecar/main.go                   Go 侧的 JSON 服务
 
 - **不能上 App Store**：涉及绕过签名风控与 DRM 密钥恢复，5.2 与版权条款都不会过。
   只能自用、公证 DMG 或 brew cask 分发。
-- **起播有等待**（见上方实测表）：整集落盘才能播。
+- **起播有等待**：虽已做成边解边播（本地 HLS），首个分片仍需 1.2–3.6s，
+  取决于清晰度和源站速度。
 - 服务端协议随时会变。上游有每日 live contract 检查；这里跟着它的错误码走，
   但**流形态变化**（比如换成 Widevine）会让 `MediaPreparer` 失效——那时会明确报
   「解密校验失败」，而不是静默黑屏。
@@ -198,6 +225,8 @@ sidecar/main.go                   Go 侧的 JSON 服务
 | `HONGGUO_PAUSE_ON_OPEN=1` | 打开后暂停在第 3 秒（截图/看控件用） |
 | `HONGGUO_FORCE_DEMO=1` | 强制离线演示数据 |
 | `HONGGUO_FEED=<频道>` | 启动即进无限流（如 `电影`） |
+| `HONGGUO_SECTION=feed\|discover\|rank\|search\|continue` | 启动即切到某一页（截图/验收用） |
+| `HONGGUO_OPEN_SERIES=<seriesID>` | 启动即打开某部剧的详情页 |
 | `HONGGUO_AUTO_NEXT=<秒>` | 起播 N 秒后走一次「下一集/下一部」 |
 | `HONGGUO_AUTO_SEEK_END=<秒>` | 起播 N 秒后跳到结尾，验证自动连播 |
 | `HONGGUO_DEBUG=1` | 打开诊断日志（默认安静） |

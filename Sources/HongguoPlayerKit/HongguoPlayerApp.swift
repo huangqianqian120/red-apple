@@ -11,7 +11,8 @@ public struct HongguoPlayerApp: App {
         WindowGroup("红果短剧") {
             RootView()
                 .environmentObject(app)
-                .preferredColorScheme(.dark)
+                .tint(Theme.accent)
+                .preferredColorScheme(.light)
         }
         .defaultSize(width: 1180, height: 800)
         .windowToolbarStyle(.unifiedCompact)

@@ -29,7 +29,10 @@ let package = Package(
                 // 启用真 SDK 后，enable-sdk.sh 会在这里插入：
                 // .product(name: "Openhongguo", package: "ios"),
             ],
-            path: "Sources/HongguoPlayerKit"
+            path: "Sources/HongguoPlayerKit",
+            // 侧栏左上角的品牌图标。走 SwiftPM 资源包，
+            // swift run 和打包成 .app 两种跑法都能找到。
+            resources: [.copy("Resources/AppMark.png")]
         ),
         .executableTarget(
             name: "HongguoPlayer",

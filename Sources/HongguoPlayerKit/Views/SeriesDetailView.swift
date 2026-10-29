@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 短剧详情页：简介 + 分集网格 + 立即播放。
+/// 短剧详情：左封面、右信息，下面是选集。
 struct SeriesDetailView: View {
     @EnvironmentObject private var app: AppModel
     let seriesID: String
@@ -10,66 +10,109 @@ struct SeriesDetailView: View {
     @State private var error: String?
     @State private var isLoading = true
 
-    private let columns = [GridItem(.adaptive(minimum: 64, maximum: 90), spacing: 8)]
+    private let columns = [GridItem(.adaptive(minimum: 58, maximum: 74), spacing: 8)]
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: Theme.Space.section) {
                 if let error {
                     ErrorBox(message: error) { Task { await load() } }
                 }
+
                 if let info {
                     header(info)
-                    episodeSection
+                    episodesSection
                 } else if isLoading {
-                    ProgressView().frame(maxWidth: .infinity).padding(.top, 80)
+                    detailSkeleton
                 }
             }
-            .padding(20)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 26)
         }
-        .navigationTitle(info?.title ?? "加载中")
+        .background(Theme.canvas)
+        .navigationTitle("")
         .task { await load() }
     }
 
+    // MARK: 头部
+
     private func header(_ info: SeriesInfo) -> some View {
-        HStack(alignment: .top, spacing: 16) {
+        HStack(alignment: .top, spacing: 20) {
             CoverImage(url: info.coverURL, title: info.title)
-                .frame(width: 132, height: 198)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            VStack(alignment: .leading, spacing: 8) {
-                Text(info.title).font(.system(size: 20, weight: .bold))
+                .frame(width: 148, height: 222)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Theme.hairline, lineWidth: 0.75)
+                )
+                .shadow(color: .black.opacity(0.10), radius: 14, y: 6)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(info.title)
+                    .font(Theme.title(24))
+                    .foregroundStyle(Theme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 HStack(spacing: 6) {
-                    if info.episodeCount > 0 { Badge(text: "全 \(info.episodeCount) 集") }
-                    ForEach(info.tags.prefix(3), id: \.self) { tag in Badge(text: tag) }
-                    if info.heat > 0 { Badge(text: "热度 \(info.heat)") }
+                    ForEach(detailTags(info), id: \.self) { Tag(text: $0) }
                 }
+
                 if !info.summary.isEmpty {
                     Text(info.summary)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(6)
+                        .font(Theme.body(12))
+                        .foregroundStyle(Theme.inkSecondary)
+                        .lineSpacing(3)
+                        .lineLimit(5)
                         .textSelection(.enabled)
                 }
+
                 if let resume = app.progress(for: info.id) {
-                    Text("上次看到 \(resume.resumeLabel)")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 5) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 10))
+                        Text("上次看到 \(resume.resumeLabel)")
+                            .font(Theme.caption(11))
+                    }
+                    .foregroundStyle(Theme.inkTertiary)
                 }
+
                 HStack(spacing: 10) {
                     Button {
-                        app.play(seriesID: info.id, title: info.title, episodeNumber: resumeEpisodeNumber)
+                        app.play(
+                            seriesID: info.id, title: info.title,
+                            episodeNumber: resumeEpisodeNumber ?? 1
+                        )
                     } label: {
-                        Label(resumeEpisodeNumber == nil ? "从第 1 集开始" : "继续第 \(resumeEpisodeNumber!) 集", systemImage: "play.fill")
+                        Label(
+                            resumeEpisodeNumber == nil ? "从第 1 集开始" : "继续第 \(resumeEpisodeNumber!) 集",
+                            systemImage: "play.fill"
+                        )
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .foregroundStyle(.white)
+                        .background(Theme.accent, in: Capsule())
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.plain)
+                    .pressableScale()
                     .keyboardShortcut(.return, modifiers: [])
-                    Button("从第 1 集") {
+
+                    Button {
                         app.play(seriesID: info.id, title: info.title, episodeNumber: 1)
+                    } label: {
+                        Text("从第 1 集")
+                            .font(.system(size: 12))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .foregroundStyle(Theme.ink)
+                            .background(Theme.hover, in: Capsule())
                     }
+                    .buttonStyle(.plain)
+                    .pressableScale()
                 }
                 .padding(.top, 4)
             }
-            Spacer()
+            Spacer(minLength: 0)
         }
     }
 
@@ -78,31 +121,63 @@ struct SeriesDetailView: View {
         return resume.episodeNumber
     }
 
-    private var episodeSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("选集").font(.system(size: 14, weight: .semibold))
+    // MARK: 选集
+
+    private var episodesSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Text("选集")
+                    .font(Theme.heading(14))
+                    .foregroundStyle(Theme.ink)
+                Text("\(episodes.count) 集")
+                    .font(Theme.caption(11))
+                    .foregroundStyle(Theme.inkTertiary)
+            }
+
             LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
                 ForEach(episodes) { episode in
-                    Button {
+                    EpisodeChip(
+                        episode: episode,
+                        isCurrent: episode.id == app.progress(for: seriesID)?.episodeID
+                    ) {
                         app.play(seriesID: seriesID, title: info?.title ?? "", episodeNumber: episode.number)
-                    } label: {
-                        Text("\(episode.number)")
-                            .font(.system(size: 12, weight: .medium))
-                            .frame(maxWidth: .infinity, minHeight: 34)
-                            .background(
-                                episode.id == app.progress(for: seriesID)?.episodeID
-                                    ? Color.accentColor.opacity(0.25)
-                                    : Color.secondary.opacity(0.12),
-                                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            )
-                            .opacity(episode.playable ? 1 : 0.45)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!episode.playable)
-                    .help(episode.displayTitle)
                 }
             }
         }
+    }
+
+    private var detailSkeleton: some View {
+        HStack(alignment: .top, spacing: 20) {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Theme.surface)
+                .frame(width: 148, height: 222)
+            VStack(alignment: .leading, spacing: 10) {
+                RoundedRectangle(cornerRadius: 5).fill(Theme.surface).frame(width: 240, height: 22)
+                RoundedRectangle(cornerRadius: 5).fill(Theme.surface).frame(width: 160, height: 12)
+                RoundedRectangle(cornerRadius: 5).fill(Theme.surface).frame(width: 320, height: 12)
+                RoundedRectangle(cornerRadius: 5).fill(Theme.surface).frame(width: 280, height: 12)
+            }
+            Spacer()
+        }
+    }
+
+    /// 接口给的 tags 里已经夹着「全1000集」「红果热度值 5442 万」，
+    /// 直接再补一遍会出现两套说法，所以先按语义去重再拼。
+    private func detailTags(_ info: SeriesInfo) -> [String] {
+        let hasEpisodeTag = info.tags.contains { $0.contains("集") }
+        let hasHeatTag = info.tags.contains { $0.contains("热度") }
+        var out: [String] = []
+        if info.episodeCount > 0, !hasEpisodeTag {
+            out.append("全 \(info.episodeCount) 集")
+        }
+        out.append(contentsOf: info.tags.filter { tag in
+            !(hasEpisodeTag && tag.contains("集")) || tag.contains("全")
+        }.prefix(3))
+        if info.heat > 0, !hasHeatTag {
+            out.append("热度 \(info.heat)")
+        }
+        return Array(out.prefix(4))
     }
 
     private func load() async {
@@ -121,14 +196,55 @@ struct SeriesDetailView: View {
     }
 }
 
-struct Badge: View {
+/// 选集按钮。
+private struct EpisodeChip: View {
+    var episode: Episode
+    var isCurrent: Bool
+    var action: () -> Void
+
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text("\(episode.number)")
+                .font(.system(size: 11.5, weight: isCurrent ? .semibold : .regular))
+                .foregroundStyle(isCurrent ? .white : (episode.playable ? Theme.ink : Theme.inkTertiary))
+                .frame(maxWidth: .infinity, minHeight: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                        .fill(fill)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                        .strokeBorder(isCurrent ? Color.clear : Theme.hairline, lineWidth: 0.75)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!episode.playable)
+        .onHover { hovering = $0 }
+        .help(episode.displayTitle)
+
+    }
+
+    private var fill: Color {
+        if isCurrent { return Theme.accent }
+        if !episode.playable { return Theme.surface.opacity(0.5) }
+        return hovering ? Theme.hover : Theme.surface
+    }
+}
+
+/// 小标签。
+struct Tag: View {
     var text: String
 
     var body: some View {
         Text(text)
             .font(.system(size: 10, weight: .medium))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(.secondary.opacity(0.18), in: Capsule())
+            .foregroundStyle(Theme.inkSecondary)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(Theme.surface, in: Capsule())
+            .overlay(Capsule().strokeBorder(Theme.hairline, lineWidth: 0.75))
     }
 }

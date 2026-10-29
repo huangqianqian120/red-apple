@@ -23,7 +23,7 @@ struct PlayerSurface: NSViewRepresentable {
     }
 }
 
-/// 播放器全屏界面。竖屏短剧居中显示，上下滑切集。
+/// 播放器界面：画面全幅，控件是浮在上面的玻璃层。
 struct PlayerView: View {
     @EnvironmentObject private var app: AppModel
     @Environment(\.dismissWindow) private var dismissWindow
@@ -44,27 +44,16 @@ struct PlayerView: View {
 
             video
 
-            // 上下滑切集时的提示层
-            if abs(dragOffset) > 40 {
-                swipeHint
-                    .transition(.opacity)
-            }
-
-            if showsControls || controller.phase.isBusy || isFailed {
-                controlsOverlay
-                    .transition(.opacity)
-            }
-
+            if abs(dragOffset) > 40 { swipeHint }
+            if showsControls || controller.phase.isBusy || isFailed { controlsOverlay }
             statusLayer
         }
-        .animation(.easeOut(duration: 0.15), value: showsControls)
+        .animation(.easeOut(duration: 0.18), value: showsControls)
         .contentShape(Rectangle())
         .onContinuousHover { phase in
             switch phase {
-            case .active:
-                revealControls()
-            case .ended:
-                scheduleHide()
+            case .active: revealControls()
+            case .ended: scheduleHide()
             }
         }
         .gesture(swipeGesture)
@@ -102,23 +91,19 @@ struct PlayerView: View {
             return .handled
         }
         .background(
-            // 竖屏剧给 9:16 的窄窗，横屏长片给 16:9 的宽窗：
-            // 否则横屏内容只能缩在竖窗中间一条，上下全是黑边。
             WindowConfigurator { window in
                 let raw = controller.videoAspectRatio
                     ?? (controller.isVertical ? 9.0 / 16.0 : 16.0 / 9.0)
-                // 量化到 0.1，避免 presentationSize 的细微差别反复触发重排。
                 let aspect = (raw * 10).rounded() / 10
                 guard fittedAspect != aspect else { return }
                 DispatchQueue.main.async {
                     guard fittedAspect != aspect else { return }
                     fittedAspect = aspect
-                    // 横屏内容铺满屏幕（16:9 内接矩形）。
+                    // 横屏铺满屏幕（16:9 内接矩形）。
                     //
-                    // 这里刻意不调用 toggleFullScreen：原生全屏会把窗口搬到一个
-                    // 新的 Space 并抢焦点，从命令行/后台启动时系统不会切过去，
-                    // 用户看到的是「窗口消失了」。铺满则没有这个问题，
-                    // 需要真正全屏（隐藏菜单栏和 Dock）时点右上角 ⤢。
+                    // 刻意不调用 toggleFullScreen：原生全屏会把窗口搬到一个新的
+                    // Space 并抢焦点，从命令行/后台启动时系统不会切过去，
+                    // 用户看到的是「窗口消失了」。需要真全屏时点右上角 ⤢。
                     if aspect >= 1.4, autoFitLandscape {
                         if let screen = window.screen ?? NSScreen.main {
                             let visible = screen.visibleFrame
@@ -130,24 +115,23 @@ struct PlayerView: View {
                                 height = visible.height - margin * 2 - chrome
                                 width = height * aspect
                             }
-                            let frame = NSRect(
-                                x: visible.midX - width / 2,
-                                y: visible.midY - (height + chrome) / 2,
-                                width: width, height: height + chrome
+                            window.setFrame(
+                                NSRect(
+                                    x: visible.midX - width / 2,
+                                    y: visible.midY - (height + chrome) / 2,
+                                    width: width, height: height + chrome
+                                ),
+                                display: true, animate: false
                             )
-                            window.setFrame(frame, display: true, animate: false)
                             window.makeKeyAndOrderFront(nil)
                         }
                         return
                     }
-                    // 以当前窗口高度为准换算宽度，保持左上角不动。
                     var frame = window.frame
                     let contentHeight = max(window.contentLayoutRect.height, 520)
                     let chrome = frame.height - window.contentLayoutRect.height
                     let newWidth = (contentHeight * aspect).rounded()
-                    let newHeight = (contentHeight + chrome).rounded()
-                    frame.size = NSSize(width: max(newWidth, 320), height: newHeight)
-                    // 别把窗口推出屏幕。
+                    frame.size = NSSize(width: max(newWidth, 300), height: (contentHeight + chrome).rounded())
                     if let screen = window.screen ?? NSScreen.main {
                         let visible = screen.visibleFrame
                         if frame.maxX > visible.maxX { frame.origin.x = visible.maxX - frame.width }
@@ -160,12 +144,10 @@ struct PlayerView: View {
         )
         .onAppear { scheduleHide() }
         .onDisappear { hideTask?.cancel() }
-        .onChange(of: controller.index) { _, _ in
-            revealControls()
-        }
+        .onChange(of: controller.index) { _, _ in revealControls() }
     }
 
-    // MARK: 视频区
+    // MARK: 画面
 
     private var video: some View {
         GeometryReader { geo in
@@ -174,7 +156,7 @@ struct PlayerView: View {
                     width: controller.isVertical ? min(geo.size.width, geo.size.height * 9 / 16) : geo.size.width,
                     height: controller.isVertical ? min(geo.size.height, geo.size.width * 16 / 9) : geo.size.width * 9 / 16
                 )
-                .clipShape(RoundedRectangle(cornerRadius: controller.isVertical ? 14 : 0, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: controller.isVertical ? 16 : 0, style: .continuous))
                 .offset(y: dragOffset * 0.15)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -184,18 +166,19 @@ struct PlayerView: View {
     private var swipeHint: some View {
         VStack(spacing: 6) {
             Image(systemName: dragOffset < 0 ? "arrow.down.circle.fill" : "arrow.up.circle.fill")
-                .font(.system(size: 34))
-            Text(dragOffset < 0 ? "下一集" : "上一集").font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 30, weight: .light))
+            Text(dragOffset < 0 ? "下一集" : "上一集")
+                .font(.system(size: 12, weight: .medium))
         }
-        .foregroundStyle(.white.opacity(0.9))
-        .padding(18)
-        .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 14))
+        .foregroundStyle(.white)
+        .padding(16)
+        .glassPanel(cornerRadius: 16)
+        .transition(.opacity)
     }
 
     private var swipeGesture: some Gesture {
         DragGesture(minimumDistance: 20)
             .onChanged { value in
-                // 只认竖直方向的意图，横向留给拖进度条。
                 guard abs(value.translation.height) > abs(value.translation.width) else { return }
                 dragOffset = value.translation.height
             }
@@ -203,7 +186,6 @@ struct PlayerView: View {
                 let dy = value.translation.height
                 dragOffset = 0
                 guard abs(dy) > 70, abs(dy) > abs(value.translation.width) else { return }
-                // 向上滑 = 下一集（信息流习惯）
                 if dy < 0 { controller.next() } else { controller.previous() }
             }
     }
@@ -211,92 +193,77 @@ struct PlayerView: View {
     // MARK: 覆盖层
 
     private var controlsOverlay: some View {
-        VStack {
+        VStack(spacing: 0) {
             topBar
             Spacer()
-            if isFailed {
-                failedPanel
-            }
-            Spacer()
+            if isFailed { failedPanel }
             bottomBar
         }
-        .padding(16)
-        .background(
-            LinearGradient(
-                colors: [.black.opacity(0.55), .clear, .clear, .black.opacity(0.65)],
-                startPoint: .top, endPoint: .bottom
-            )
-            .ignoresSafeArea()
-            .allowsHitTesting(false)
-        )
+        .padding(18)
     }
 
     private var topBar: some View {
         HStack(spacing: 10) {
-            Button {
+            GlassIconButton(system: "chevron.left", label: "关闭播放窗口（Esc）") {
                 app.closePlayer()
                 dismissWindow()
-            } label: {
-                Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold))
             }
-            .buttonStyle(.plain)
-            .help("关闭播放窗口（Esc）")
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(controller.series?.title ?? app.presented?.title ?? "播放中")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12.5, weight: .medium))
                     .lineLimit(1)
-                HStack(spacing: 6) {
+                    .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
+                HStack(spacing: 5) {
                     Text(controller.currentEpisode?.displayTitle ?? "")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.65))
+                        .font(.system(size: 10))
+                        .opacity(0.62)
                     if controller.isFeedMode {
                         Text(controller.feedPosition)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.white.opacity(0.45))
+                            .font(.system(size: 9.5))
+                            .opacity(0.45)
                         if !controller.hasNext {
                             Text("· 即将换下一部")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.yellow.opacity(0.8))
+                                .font(.system(size: 9.5))
+                                .foregroundStyle(Color.yellow.opacity(0.9))
                         }
                     }
                 }
             }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 6)
+            .glassPanel(cornerRadius: 13, tint: .black.opacity(0.18))
+
             Spacer()
+
             if let host = Optional(controller.preparedFrom), !host.isEmpty, controller.phase == .ready {
-                Text(host).font(.system(size: 10)).foregroundStyle(.white.opacity(0.4))
+                Text(host)
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .shadow(color: .black.opacity(0.35), radius: 2)
+                    .lineLimit(1)
+                    .frame(maxWidth: 260, alignment: .trailing)
+                    .padding(.trailing, 2)
             }
-            if controller.isFeedMode, controller.hasNext, controller.index + 1 >= controller.episodes.count {
-                Button {
-                    controller.next()
-                } label: {
-                    Label("下一部", systemImage: "forward.end.alt.fill")
-                        .font(.system(size: 12))
+
+            HStack(spacing: 6) {
+                if controller.isFeedMode, controller.hasNext, controller.index + 1 >= controller.episodes.count {
+                    TextButton(title: "下一部", system: "forward.end.alt.fill") {
+                        controller.next()
+                    }
                 }
-                .buttonStyle(.plain)
-                .help("直接跳下一部")
+                GlassIconButton(system: "list.bullet", label: "选集") {
+                    showsEpisodes.toggle()
+                }
+                .popover(isPresented: $showsEpisodes, arrowEdge: .bottom) {
+                    episodeList
+                }
+                GlassIconButton(system: "arrow.up.left.and.arrow.down.right", label: "全屏") {
+                    NSApp.keyWindow?.toggleFullScreen(nil)
+                }
             }
-            Button {
-                showsEpisodes.toggle()
-            } label: {
-                Label("选集", systemImage: "list.bullet")
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(.plain)
-            .popover(isPresented: $showsEpisodes, arrowEdge: .bottom) {
-                episodeList
-            }
-            Button {
-                NSApp.keyWindow?.toggleFullScreen(nil)
-            } label: {
-                Image(systemName: "arrow.up.left.and.arrow.down.right").font(.system(size: 12))
-            }
-            .buttonStyle(.plain)
-            .help("全屏")
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 4)
-        .padding(.top, 22)   // 让开窗口左上角的红绿灯（无标题栏窗口里它们浮在内容上）
     }
 
     private var bottomBar: some View {
@@ -305,20 +272,23 @@ struct PlayerView: View {
                 HStack(spacing: 8) {
                     ProgressView(value: controller.prepareProgress)
                         .progressViewStyle(.linear)
-                        .frame(maxWidth: 260)
+                        .tint(.white)
+                        .frame(maxWidth: 240)
                     Text("解密中 \(Int(controller.prepareProgress * 100))%")
-                        .font(.system(size: 10))
+                        .font(.system(size: 9.5))
                         .foregroundStyle(.white.opacity(0.7))
                 }
             }
             if controller.phase == .resolving {
-                Text("正在获取播放地址…").font(.system(size: 11)).foregroundStyle(.white.opacity(0.7))
+                Text("正在获取播放地址…")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.65))
             }
-            HStack(spacing: 12) {
+
+            HStack(spacing: 10) {
                 Text(SeriesProgress.mmss(scrubbing ?? controller.currentTime))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.75))
-                    .frame(width: 44, alignment: .leading)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .frame(width: 42, alignment: .leading)
 
                 Slider(
                     value: Binding(
@@ -332,129 +302,116 @@ struct PlayerView: View {
                         scrubbing = nil
                     }
                 }
-                .controlSize(.small)
+                .controlSize(.mini)
+                .tint(.white)
 
                 Text(SeriesProgress.mmss(controller.duration))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.75))
-                    .frame(width: 44, alignment: .trailing)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .frame(width: 42, alignment: .trailing)
             }
+            .foregroundStyle(.white.opacity(0.82))
+            .shadow(color: .black.opacity(0.3), radius: 2)
 
-            HStack(spacing: 18) {
-                iconButton("backward.end.fill", help: "上一集（↑）", disabled: !controller.hasPrevious) {
+            HStack(spacing: 14) {
+                GlassIconButton(system: "backward.end.fill", label: "上一集（↑）", disabled: !controller.hasPrevious) {
                     controller.previous()
                 }
-                iconButton("gobackward.5", help: "后退 5s（←）") { controller.skip(by: -5) }
+                GlassIconButton(system: "gobackward.5", label: "后退 5 秒（←）") {
+                    controller.skip(by: -5)
+                }
+
                 Button {
                     controller.togglePlay()
                 } label: {
-                    Image(systemName: controller.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 38))
+                    Image(systemName: controller.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(.black.opacity(0.82))
+                        .frame(width: 46, height: 46)
+                        .background(.white.opacity(0.92), in: Circle())
                 }
                 .buttonStyle(.plain)
+                .pressableScale()
                 .keyboardShortcut(.space, modifiers: [])
-                iconButton("goforward.5", help: "前进 5s（→）") { controller.skip(by: 5) }
-                iconButton("forward.end.fill", help: "下一集（↓）", disabled: !controller.hasNext) {
+
+                GlassIconButton(system: "goforward.5", label: "前进 5 秒（→）") {
+                    controller.skip(by: 5)
+                }
+                GlassIconButton(system: "forward.end.fill", label: "下一集（↓）", disabled: !controller.hasNext) {
                     controller.next()
                 }
 
                 Spacer()
 
-                speedMenu
-                qualityMenu
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 4)
-        }
-    }
-
-    private func iconButton(
-        _ name: String, help: String, disabled: Bool = false, action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Image(systemName: name).font(.system(size: 15))
-        }
-        .buttonStyle(.plain)
-        .disabled(disabled)
-        .opacity(disabled ? 0.35 : 1)
-        .help(help)
-    }
-
-    private var speedMenu: some View {
-        Menu {
-            ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0], id: \.self) { value in
-                Button {
-                    controller.speed = value
-                } label: {
-                    if abs(controller.speed - value) < 0.01 {
-                        Label("\(value, specifier: "%g")×", systemImage: "checkmark")
-                    } else {
-                        Text("\(value, specifier: "%g")×")
+                GlassMenuLabel(text: String(format: "%g×", controller.speed), help: "播放速度") {
+                    ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0], id: \.self) { value in
+                        Button {
+                            controller.speed = value
+                        } label: {
+                            if abs(controller.speed - value) < 0.01 {
+                                Label("\(value, specifier: "%g")×", systemImage: "checkmark")
+                            } else {
+                                Text("\(value, specifier: "%g")×")
+                            }
+                        }
                     }
                 }
-            }
-        } label: {
-            Text("\(controller.speed, specifier: "%g")×").font(.system(size: 12, weight: .medium))
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("播放速度")
-    }
 
-    private var qualityMenu: some View {
-        Menu {
-            if controller.availableQualities.isEmpty {
-                Text("无可用清晰度")
-            } else {
-                ForEach(controller.availableQualities, id: \.self) { label in
-                    Button {
-                        controller.quality = label
-                    } label: {
-                        if label == controller.quality {
-                            Label(label, systemImage: "checkmark")
-                        } else {
-                            Text(label)
+                GlassMenuLabel(
+                    text: controller.quality.isEmpty ? "清晰度" : controller.quality,
+                    help: "切换清晰度（会重新解密，已缓存的清晰度瞬开）"
+                ) {
+                    if controller.availableQualities.isEmpty {
+                        Text("无可用清晰度")
+                    } else {
+                        ForEach(controller.availableQualities, id: \.self) { label in
+                            Button {
+                                controller.quality = label
+                            } label: {
+                                if label == controller.quality {
+                                    Label(label, systemImage: "checkmark")
+                                } else {
+                                    Text(label)
+                                }
+                            }
                         }
                     }
                 }
             }
-        } label: {
-            Text(controller.quality.isEmpty ? "清晰度" : controller.quality)
-                .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.white)
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("切换清晰度（会重新解密，已缓存的清晰度瞬开）")
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .glassPanel(cornerRadius: 18, tint: .black.opacity(0.18))
     }
 
     private var episodeList: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 46, maximum: 56), spacing: 6)], spacing: 6) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 44, maximum: 52), spacing: 6)], spacing: 6) {
                 ForEach(controller.episodes) { episode in
                     Button {
                         controller.play(episodeNumber: episode.number)
                         showsEpisodes = false
                     } label: {
                         Text("\(episode.number)")
-                            .font(.system(size: 11, weight: .medium))
-                            .frame(width: 46, height: 28)
+                            .font(.system(size: 11, weight: episode.id == controller.currentEpisode?.id ? .semibold : .regular))
+                            .foregroundStyle(episode.id == controller.currentEpisode?.id ? .white : Theme.ink)
+                            .frame(width: 44, height: 28)
                             .background(
-                                episode.id == controller.currentEpisode?.id
-                                    ? Color.accentColor.opacity(0.85)
-                                    : Color.secondary.opacity(0.15),
-                                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(episode.id == controller.currentEpisode?.id ? Theme.accent : Theme.surface)
                             )
                     }
                     .buttonStyle(.plain)
                     .disabled(!episode.playable)
+                    .opacity(episode.playable ? 1 : 0.4)
                 }
             }
-            .padding(10)
+            .padding(12)
         }
-        .frame(width: 300, height: 280)
+        .frame(width: 296, height: 268)
     }
 
-    // MARK: 状态层
+    // MARK: 状态
 
     private var isFailed: Bool {
         if case .failed = controller.phase { return true }
@@ -463,56 +420,65 @@ struct PlayerView: View {
 
     @ViewBuilder
     private var statusLayer: some View {
-        switch controller.phase {
-        case .resolving, .preparing:
-            if !showsControls {
-                VStack(spacing: 8) {
-                    ProgressView(value: controller.phase == .preparing ? controller.prepareProgress : nil)
-                        .progressViewStyle(.circular)
-                        .controlSize(.large)
-                    Text(controller.phase == .resolving ? "获取播放地址…" : "解密中…")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.7))
-                }
+        if controller.phase == .resolving || controller.phase == .preparing, !showsControls {
+            VStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(.white)
+                Text(controller.phase == .resolving ? "获取播放地址…" : "解密中…")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.white.opacity(0.65))
             }
-        case .failed:
-            EmptyView()
-        case .idle, .ready:
-            EmptyView()
+            .padding(18)
+            .glassPanel(cornerRadius: 18)
         }
     }
 
     private var failedPanel: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 11) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 26))
-                .foregroundStyle(.yellow)
+                .font(.system(size: 22))
+                .foregroundStyle(Color.yellow)
             Text(failureMessage)
-                .font(.system(size: 12))
+                .font(.system(size: 11.5))
+                .foregroundStyle(.white.opacity(0.92))
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
+                .frame(maxWidth: 380)
                 .textSelection(.enabled)
-            HStack(spacing: 10) {
+
+            HStack(spacing: 8) {
                 Button("重试") { controller.retry() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.black.opacity(0.85))
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 6)
+                    .background(.white.opacity(0.92), in: Capsule())
+                    .pressableScale()
                 if controller.needsDeviceReset {
                     Button("换一台匿名设备并重试") { controller.retryWithNewDevice() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .glassPanel(cornerRadius: 20, interactive: true)
                 }
                 Button("下一集") { controller.next() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.white.opacity(0.8))
                     .disabled(!controller.hasNext)
             }
         }
-        .foregroundStyle(.white)
         .padding(18)
-        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
+        .glassPanel(cornerRadius: 18)
     }
 
     private var failureMessage: String {
         if case .failed(let message) = controller.phase { return message }
         return "播放失败"
     }
-
-    // MARK: 控件显隐
 
     private func revealControls() {
         showsControls = true
@@ -527,5 +493,76 @@ struct PlayerView: View {
             guard !Task.isCancelled else { return }
             await MainActor.run { showsControls = false }
         }
+    }
+}
+
+// MARK: - 玻璃控件
+
+/// 圆形玻璃图标按钮。
+struct GlassIconButton: View {
+    var system: String
+    var label: String
+    var disabled = false
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: system)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .glassPanel(cornerRadius: 15, tint: .black.opacity(0.2), interactive: true)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.32 : 1)
+        .help(label)
+        .pressableScale()
+    }
+}
+
+/// 文字玻璃按钮。
+struct TextButton: View {
+    var title: String
+    var system: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: system).font(.system(size: 10))
+                Text(title).font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 7)
+            .glassPanel(cornerRadius: 15, tint: .black.opacity(0.2), interactive: true)
+        }
+        .buttonStyle(.plain)
+        .pressableScale()
+    }
+}
+
+/// 玻璃下拉菜单（倍速 / 清晰度）。
+struct GlassMenuLabel<Content: View>: View {
+    var text: String
+    var help: String
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        Menu {
+            content()
+        } label: {
+            Text(text)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .glassPanel(cornerRadius: 15, tint: .black.opacity(0.2), interactive: true)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(help)
     }
 }
