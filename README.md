@@ -31,20 +31,28 @@
 
 ## 快速开始
 
+**前置**：macOS 14+；Swift 工具链（Command Line Tools 就够，不需要完整 Xcode）。
+想要真数据还需要 Go（sidecar 用）；想看真片源还需要 ffmpeg
+（`brew install ffmpeg`，或设 `HONGGUO_FFMPEG` 指向二进制）。
+
 ```sh
-# 1. 编译 App 本体
-swift build
-
-# 2. 编译访问真 API 的 Go sidecar（需要 Go，不需要 Xcode）
+# 1. 编译访问真 API 的 Go sidecar（只要 Go，不需要 Xcode）
+#    默认会自动 clone 上游 openhongguo 到 .vendor/；GitHub 不通就先自己 clone，
+#    再把 SDK 路径传进来。
 ./Scripts/build-sidecar.sh
+# 或者： ./Scripts/build-sidecar.sh ~/Projects/openhongguo
 
-# 3. 打包成 .app（会把 sidecar 一起塞进 Resources）
+# 2. 打包成 .app（内部已经 swift build -c release，
+#    会把 sidecar / 资源包 / 图标一起塞进去）
 ./Scripts/make-app.sh
 open "build/RED APPLE.app"
 
-# 自测
+# 自测（81 项断言，纯离线，不碰网络、不碰片源）
 swift run selftest
 ```
+
+**ffmpeg 是播真片源的硬依赖**：红果的流都是加密/分段（cenc、DASH），没有 ffmpeg
+时 App 能开、能浏览，但点播放会提示「这一集是加密或分段流，需要 ffmpeg 才能播」。
 
 没有 Go / 没有 sidecar 时 App 会自动退回**离线演示数据**，播放器本身仍可用
 （⌘O 打开本地视频）。
