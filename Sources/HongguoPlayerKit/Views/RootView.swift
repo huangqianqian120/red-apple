@@ -119,7 +119,7 @@ private struct Sidebar: View {
                 .frame(width: 25, height: 25)
 
             VStack(alignment: .leading, spacing: 0) {
-                Text("红果短剧")
+                Text("RED APPLE")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.ink)
                 Text(app.isLive ? "匿名设备" : "演示数据")

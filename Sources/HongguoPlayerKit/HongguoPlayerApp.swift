@@ -7,7 +7,7 @@ public struct HongguoPlayerApp: App {
     public init() {}
 
     public var body: some Scene {
-        WindowGroup("红果短剧") {
+        WindowGroup("RED APPLE") {
             RootView()
                 .environmentObject(app)
                 .tint(Theme.accent)

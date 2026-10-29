@@ -36,7 +36,7 @@ public actor SidecarCatalogService: CatalogService {
 
     public init(executable: URL, profileURL: URL, timeout: TimeInterval = 60) throws {
         self.executable = executable
-        self.describe = "红果短剧 · 匿名设备"
+        self.describe = "RED APPLE · 匿名设备"
         self.timeout = timeout
 
         try FileManager.default.createDirectory(

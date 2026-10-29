@@ -162,7 +162,7 @@ struct RankView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.section) {
-                PageHeader(title: "短剧榜", subtitle: "红果短剧实时榜单") {
+                PageHeader(title: "短剧榜", subtitle: "RED APPLE 实时榜单") {
                     if isLoading { ProgressView().controlSize(.small) }
                 }
 

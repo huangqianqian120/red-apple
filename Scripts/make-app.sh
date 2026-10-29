@@ -4,7 +4,7 @@
 #   ./Scripts/make-app.sh            # release
 #   ./Scripts/make-app.sh debug      # debug
 #
-# 产物：build/红果短剧.app
+# 产物：build/RED APPLE.app
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 cd "$here"
@@ -13,7 +13,7 @@ config=${1:-release}
 swift build -c "$config"
 bin=$(swift build -c "$config" --show-bin-path)
 
-name="红果短剧"
+name="RED APPLE"
 app="$here/build/$name.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -71,9 +71,9 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>红果短剧</string>
+	<string>RED APPLE</string>
 	<key>CFBundleDisplayName</key>
-	<string>红果短剧</string>
+	<string>RED APPLE</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

@@ -1,4 +1,4 @@
-# 红果短剧 · macOS 播放器
+# RED APPLE · 红果短剧 macOS 播放器
 
 基于 [`openhongguo`](https://github.com/beilunyang/openhongguo) SDK 的 macOS 桌面短剧播放器。
 竖屏刷剧、上下滑切集、自动连播、进度记忆、倍速与清晰度切换。
@@ -37,7 +37,7 @@ swift build
 
 # 3. 打包成 .app（会把 sidecar 一起塞进 Resources）
 ./Scripts/make-app.sh
-open "build/红果短剧.app"
+open "build/RED APPLE.app"
 
 # 自测
 swift run selftest

@@ -27,7 +27,7 @@ public final class SDKCatalogService: CatalogService, @unchecked Sendable {
         )
     }
 
-    public var describe: String { "红果短剧 · 匿名设备" }
+    public var describe: String { "RED APPLE · 匿名设备" }
     public var isLive: Bool { true }
 
     // MARK: 片库
