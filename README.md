@@ -5,7 +5,7 @@
 ![RED APPLE 界面](docs/screenshot.jpg)
 
 基于 [`openhongguo`](https://github.com/beilunyang/openhongguo) SDK 的 macOS 桌面短剧播放器。
-竖屏刷剧、上下滑切集、自动连播、进度记忆、倍速与清晰度切换。
+支持刷剧、上下滑切集、自动连播、进度记忆、倍速与清晰度切换。
 
 
 ---
