@@ -1,0 +1,7 @@
+.build/
+build/
+.vendor/
+*.xcframework/
+.DS_Store
+# sidecar 的依赖被 replace 到本地 SDK 路径，换机器要重跑 build-sidecar.sh
+sidecar/go.sum
