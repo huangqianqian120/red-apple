@@ -49,44 +49,26 @@ swift run selftest
 没有 Go / 没有 sidecar 时 App 会自动退回**离线演示数据**，播放器本身仍可用
 （⌘O 打开本地视频）。
 
-## 播放链路
+## 架构概览
 
-服务端给的流有三种形态，决定了播放器怎么做：
+数据层走 `CatalogService` 协议：默认是离线演示数据，接真服务时换成 Go sidecar
+（行 JSON 协议，`go build` 即可，不依赖 Xcode）。播放层把不同形态的流统一成一个
+`MediaPlan`（地址 + 时长 + 是否需要本地处理）：不需要处理的直接交给 AVPlayer，
+需要处理的先落成本地明文文件再播，起播优先走分片流，其次整段落盘。界面是 SwiftUI
+两栏布局，播放层覆盖在列表之上，不另开窗口。
 
-| 形态 | 处理 |
-|---|---|
-| 明文单文件 MP4 | 直接把 URL 交给 AVPlayer，不落盘 |
-| 加密单文件（cenc-aes-ctr） | ffmpeg `-decryption_key` + `-c copy` → 本地明文 MP4，或直接切 HLS |
-| byte-range DASH + 独立音轨 | ffmpeg 双输入各带 key + `-map` 拼成一路 |
+## 开源声明
 
-解密有两条路，起播优先走第一条：
+本项目以 **MIT** 许可发布，完整条款见 [LICENSE](LICENSE)。
 
-1. **边解边播（HLS）**：`ffmpeg -f hls -hls_time 4 -hls_playlist_type event` 把解密后的
-   数据切成 fMP4 分片，App 起一个 `127.0.0.1` 的最小 HTTP 服务，AVPlayer 逐段拉。
-   只等第一片（约 2 秒）就能出画面，播完的分片留在磁盘上，下次直接命中。
-2. **整集落盘**：HLS 起不来（或本地服务端口失败）时退回老路——整集 decrypt 成 mp4，
-   校验解码一帧后播放。
-
-```
-sidecar: resolvePlayback ──▶ 选清晰度 ──▶ MediaPlan（地址 + key + 时长）
-                                             │
-                              ┌──────────────┴──────────────┐
-                        不需要处理                     需要处理
-                              │                             │
-                    AVPlayer(CDN 直连)        ffmpeg 解密 → 缓存 MP4 → 解码校验一帧
-                              └──────────▶ AVPlayer ◀────────┘
-                                             │
-                                  进度记忆 / 预取下一集
-```
-
-关键设计：
-
-- **必须校验解码一帧**。`-c copy` 不重编码，错误密钥也会「成功」产出一个解不开的
-  文件；所以解密后额外跑 `-frames:v 1 -f null -`，失败就删缓存并报错。
-  上游每天的契约检查也是这么验的。
-- **缓存键 = 分集 ID + 清晰度**，位于 `~/Library/Caches/HongguoPlayer/media/`。
-  用户点播撞上后台预取时共用同一个 in-flight Task，不会重复解密。
-- **默认 720p**：中文短剧 1080p 单集能有 38MB（实测），720p 竖屏只有 5MB 左右，
-  起播快一个数量级；用户可以手动切回 1080p。
-- **窗口按真实分辨率适配**：竖屏剧 9:16 窄窗，横屏长片 16:9 宽窗，
-  以 `AVPlayerItem.presentationSize` 为准。
+- **第三方组件**：数据层依赖 [`openhongguo`](https://github.com/beilunyang/openhongguo)
+  （Apache-2.0）。其许可证副本见 [LICENSES/Apache-2.0.txt](LICENSES/Apache-2.0.txt)，
+  归属与修改说明见 [NOTICE](NOTICE)。
+- **ffmpeg 不在本仓库内，也不随打包产物分发**：程序只调用你自己安装的 ffmpeg，
+  它的许可证（Homebrew 版本为 GPL-3.0，其他构建可能不同）由使用者自行遵守。
+- **不含片源、不含密钥、不含凭据**：仓库里没有任何内容文件、封面素材或设备注册信息；
+  运行时产生的状态都在 `~/Library/` 下，已在 `.gitignore` 中排除。
+- **图标素材**：`Resources/AppIcon-source.svg` 为第三方图标，版权归原作者；
+  衍生的 `AppIcon-1024.png` 与 `AppMark.png` 同源同许可，使用前请自行确认其条款。
+- **不接受**以本项目名义进行的商业使用、二次分发或部署为对外服务。
+- 欢迎 issue 与 PR；提交即视为同意上述声明同样约束贡献内容。
