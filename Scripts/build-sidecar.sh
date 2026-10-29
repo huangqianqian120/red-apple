@@ -37,7 +37,21 @@ fi
 export GOPROXY
 
 echo "→ SDK: $sdk"
-(cd "$here/sidecar" && go mod edit -replace "github.com/beilunyang/openhongguo=$sdk" && go mod tidy && go build -trimpath -ldflags="-s -w" -o "$here/build/openhongguo-sidecar" .)
+# 用一份临时 go.mod 构建，构建完把仓库里的 go.mod 还原成可移植的相对路径，
+# 免得本机绝对路径被提交上去（换机器 / 别人 clone 会直接构建失败）。
+tmpmod=$(mktemp -d)
+cp "$here/sidecar/go.mod" "$tmpmod/go.mod"
+[ -f "$here/sidecar/go.sum" ] && cp "$here/sidecar/go.sum" "$tmpmod/go.sum"
+
+(cd "$here/sidecar" \
+	&& go mod edit -modfile="$tmpmod/go.mod" -replace "github.com/beilunyang/openhongguo=$sdk" \
+	&& go mod tidy -modfile="$tmpmod/go.mod" \
+	&& go build -modfile="$tmpmod/go.mod" -trimpath -ldflags="-s -w" -o "$here/build/openhongguo-sidecar" .) \
+	|| { rm -rf "$tmpmod"; exit 1; }
+
+# 顺带把 go.sum 同步回来（有变化才动），go.mod 本身保持相对路径不变。
+[ -f "$tmpmod/go.sum" ] && cp "$tmpmod/go.sum" "$here/sidecar/go.sum"
+rm -rf "$tmpmod"
 
 mkdir -p "$here/build"
 echo "built $here/build/openhongguo-sidecar  ($(du -h "$here/build/openhongguo-sidecar" | cut -f1))"
