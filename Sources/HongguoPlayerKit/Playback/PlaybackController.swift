@@ -46,6 +46,14 @@ public final class PlaybackController: ObservableObject {
     /// 服务端给的这一集总时长；边解边播时 AVPlayer 只知道自己已加载的部分，
     /// 判断「是否真的播完」要用这个值。
     private var expectedDuration: Double = 0
+    /// 起播计时：从点播到出画面，用来定位瓶颈。
+    private var startClock: Date?
+    private func mark(_ label: String) {
+        guard let startClock else { return }
+        Debug.log(String(format: "[%6.2fs] %@", Date().timeIntervalSince(startClock), label))
+    }
+    /// AVPlayer 实际已加载的时长（HLS 边解边播时小于总时长）。
+    private var loadedDuration: Double = 0
     /// 真实画面宽高比（来自 AVPlayerItem），用来把播放窗口调成合适的形状。
     @Published public private(set) var videoAspectRatio: CGFloat?
     /// 服务端对这个匿名设备返回了空结果：UI 该给一个「换设备」按钮。
@@ -168,6 +176,7 @@ public final class PlaybackController: ObservableObject {
             feedIndex = 0
         }
         loadTask?.cancel()
+        startClock = Date()
         loadTask = Task { [weak self] in
             guard let self else { return }
             self.phase = .resolving
@@ -179,6 +188,7 @@ public final class PlaybackController: ObservableObject {
                     self.fail("这部短剧没有可播的分集")
                     return
                 }
+                self.mark("series+episodes 就绪（\(list.count) 集）")
                 let progress = await self.progressStore.progress(for: seriesID)
                 self.series = info
                 self.episodes = list
@@ -464,6 +474,7 @@ public final class PlaybackController: ObservableObject {
 
         do {
             let playback = try await service.playback(episodeID: episode.id)
+            mark("playback 就绪（\(playback.streams.count) 个清晰度）")
             availableQualities = Self.qualityOptions(for: playback)
             // 默认清晰度必须在 select 之前定：起播延迟 ≈ 单集体积 / 带宽，
             // 而中文短剧 1080p 单集能有 40MB。默认 720p，用户可手动切回。
@@ -481,6 +492,11 @@ public final class PlaybackController: ObservableObject {
             guard let stream = playback.select(quality: quality) else {
                 fail("这一集没有可用的清晰度")
                 return
+            }
+            // 清晰度自带分辨率：比等 AVPlayer 的 presentationSize 更早、更可靠
+            // （HLS 流的 presentationSize 要等一阵才有值）。
+            if stream.width > 0, stream.height > 0 {
+                videoAspectRatio = CGFloat(stream.width) / CGFloat(stream.height)
             }
             if !quality.isEmpty, stream.definition != quality {
                 isAdjustingQuality = true
@@ -509,6 +525,7 @@ public final class PlaybackController: ObservableObject {
                 // 先用边解边播（长片只等第一片），本地服务不可用时退回整集落盘。
                 if let server,
                    let streaming = try? await preparer.startStream(plan, server: server) {
+                    mark("HLS 首片就绪")
                     target = streaming
                     currentStreamPlan = plan
                     configuredStreamHandler(preparer)
@@ -537,6 +554,7 @@ public final class PlaybackController: ObservableObject {
     }
 
     private func attach(url: URL, durationHint: Double) {
+        mark("attach（" + (url.scheme == "file" ? "本地文件" : "流") + "）")
         let asset = AVURLAsset(url: url)
         let item = AVPlayerItem(asset: asset)
         installEndObserver(for: item)
@@ -550,7 +568,7 @@ public final class PlaybackController: ObservableObject {
             guard let self else { return }
             await self.refreshDuration()
             if start > 1 {
-                self.seek(to: start)
+                await self.seekWhenLoaded(to: start)
             }
             if ProcessInfo.processInfo.environment["HONGGUO_PAUSE_ON_OPEN"] != nil {
                 // 调试/截图用：不要自动播，控件就不会自动隐藏。
@@ -586,6 +604,22 @@ public final class PlaybackController: ObservableObject {
         }
     }
 
+    /// 续播要等媒体真的加载到那个位置。
+    ///
+    /// 边解边播时 playlist 一开始只有几秒，直接 seek 到 1:20 会让 AVPlayer
+    /// 停在「等数据」上，看起来就是卡住不动。
+    private func seekWhenLoaded(to target: Double) async {
+        for _ in 0..<40 {
+            if loadedDuration <= 0 || loadedDuration > target + 1 {
+                seek(to: target)
+                return
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        // 等不到就从头播，别把用户按在缓冲圈上。
+        seek(to: 0)
+    }
+
     private func refreshDuration() async {
         guard let item = player.currentItem else { return }
         // 等一帧 ready 之后 presentationSize 才有值。
@@ -600,7 +634,10 @@ public final class PlaybackController: ObservableObject {
         if let value = try? await item.asset.load(.duration) {
             let seconds = value.seconds
             // HLS event 播放列表的时长是递增的：只允许变长，不要缩回。
-            if seconds.isFinite, seconds > 0 { duration = max(duration, seconds) }
+            if seconds.isFinite, seconds > 0 {
+                loadedDuration = seconds
+                duration = max(duration, seconds)
+            }
         }
     }
 

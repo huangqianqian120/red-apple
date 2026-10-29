@@ -35,6 +35,8 @@ struct PlayerView: View {
     @State private var showsEpisodes = false
     @State private var dragOffset: CGFloat = 0
     @State private var fittedAspect: CGFloat?
+    /// 横屏剧自动铺满屏幕。可在「显示」菜单里关掉。
+    @AppStorage("autoFitLandscape") private var autoFitLandscape = true
 
     var body: some View {
         ZStack {
@@ -91,20 +93,53 @@ struct PlayerView: View {
             return .handled
         }
         .onKeyPress(.escape) {
-            app.closePlayer()
-            dismissWindow()
+            if let window = NSApp.keyWindow, window.styleMask.contains(.fullScreen) {
+                window.toggleFullScreen(nil)
+            } else {
+                app.closePlayer()
+                dismissWindow()
+            }
             return .handled
         }
         .background(
             // 竖屏剧给 9:16 的窄窗，横屏长片给 16:9 的宽窗：
             // 否则横屏内容只能缩在竖窗中间一条，上下全是黑边。
             WindowConfigurator { window in
-                let aspect = controller.videoAspectRatio
+                let raw = controller.videoAspectRatio
                     ?? (controller.isVertical ? 9.0 / 16.0 : 16.0 / 9.0)
+                // 量化到 0.1，避免 presentationSize 的细微差别反复触发重排。
+                let aspect = (raw * 10).rounded() / 10
                 guard fittedAspect != aspect else { return }
                 DispatchQueue.main.async {
                     guard fittedAspect != aspect else { return }
                     fittedAspect = aspect
+                    // 横屏内容铺满屏幕（16:9 内接矩形）。
+                    //
+                    // 这里刻意不调用 toggleFullScreen：原生全屏会把窗口搬到一个
+                    // 新的 Space 并抢焦点，从命令行/后台启动时系统不会切过去，
+                    // 用户看到的是「窗口消失了」。铺满则没有这个问题，
+                    // 需要真正全屏（隐藏菜单栏和 Dock）时点右上角 ⤢。
+                    if aspect >= 1.4, autoFitLandscape {
+                        if let screen = window.screen ?? NSScreen.main {
+                            let visible = screen.visibleFrame
+                            let chrome = window.frame.height - window.contentLayoutRect.height
+                            let margin: CGFloat = 24
+                            var width = visible.width - margin * 2
+                            var height = width / aspect
+                            if height > visible.height - margin * 2 - chrome {
+                                height = visible.height - margin * 2 - chrome
+                                width = height * aspect
+                            }
+                            let frame = NSRect(
+                                x: visible.midX - width / 2,
+                                y: visible.midY - (height + chrome) / 2,
+                                width: width, height: height + chrome
+                            )
+                            window.setFrame(frame, display: true, animate: false)
+                            window.makeKeyAndOrderFront(nil)
+                        }
+                        return
+                    }
                     // 以当前窗口高度为准换算宽度，保持左上角不动。
                     var frame = window.frame
                     let contentHeight = max(window.contentLayoutRect.height, 520)

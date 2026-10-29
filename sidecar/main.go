@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/beilunyang/openhongguo/adapters"
@@ -141,6 +142,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 每个请求在自己的 goroutine 里跑：浏览页的 discover 有 3 秒，不能让它
+	// 把播放请求堵在后面（App 启动时会同时发浏览和播放两类请求）。
+	// 响应按 id 匹配，可以乱序回来；写 stdout 要加锁。
+	var writeMu sync.Mutex
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetEscapeHTML(false)
 
@@ -156,35 +161,38 @@ func main() {
 			fmt.Fprintf(os.Stderr, "sidecar: 请求不是 JSON：%v\n", err)
 			continue
 		}
-		result, callErr := dispatch(client, req)
+		go func(req request) {
+			result, callErr := dispatch(client, req)
 
-		// 匿名设备有额度：撞到 anonymous_limited 时自动换一台再试一次。
-		// 只重试一次——连续限流说明这台机器被针对了，继续换也没用。
-		if errors.Is(callErr, sdk.ErrAnonymousLimited) {
-			fmt.Fprintln(os.Stderr, "sidecar: 匿名设备额度用尽，换一台重试")
-			resetCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			resetErr := client.ResetDevice(resetCtx)
-			cancel()
-			if resetErr != nil {
-				fmt.Fprintf(os.Stderr, "sidecar: 换设备失败：%v\n", resetErr)
-			} else {
-				result, callErr = dispatch(client, req)
+			// 匿名设备有额度：撞到 anonymous_limited 时自动换一台再试一次。
+			// 只重试一次——连续限流说明这台机器被针对了，继续换也没用。
+			if errors.Is(callErr, sdk.ErrAnonymousLimited) {
+				fmt.Fprintln(os.Stderr, "sidecar: 匿名设备额度用尽，换一台重试")
+				resetCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				resetErr := client.ResetDevice(resetCtx)
+				cancel()
+				if resetErr != nil {
+					fmt.Fprintf(os.Stderr, "sidecar: 换设备失败：%v\n", resetErr)
+				} else {
+					result, callErr = dispatch(client, req)
+				}
 			}
-		}
-		resp := response{ID: req.ID, Result: result}
-		if callErr != nil {
-			retryAfter := sdk.RetryAfter(callErr, 0)
-			resp = response{ID: req.ID, Error: &wireError{
-				Code:      errorCode(callErr),
-				Message:   callErr.Error(),
-				Retryable: sdk.Retryable(callErr),
-				RetryMs:   retryAfter.Milliseconds(),
-			}}
-		}
-		if err := enc.Encode(resp); err != nil {
-			fmt.Fprintf(os.Stderr, "sidecar: 写响应失败：%v\n", err)
-			return
-		}
+			resp := response{ID: req.ID, Result: result}
+			if callErr != nil {
+				retryAfter := sdk.RetryAfter(callErr, 0)
+				resp = response{ID: req.ID, Error: &wireError{
+					Code:      errorCode(callErr),
+					Message:   callErr.Error(),
+					Retryable: sdk.Retryable(callErr),
+					RetryMs:   retryAfter.Milliseconds(),
+				}}
+			}
+			writeMu.Lock()
+			defer writeMu.Unlock()
+			if err := enc.Encode(resp); err != nil {
+				fmt.Fprintf(os.Stderr, "sidecar: 写响应失败：%v\n", err)
+			}
+		}(req)
 	}
 }
 

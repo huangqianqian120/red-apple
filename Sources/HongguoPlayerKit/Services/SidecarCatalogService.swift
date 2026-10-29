@@ -52,7 +52,9 @@ public actor SidecarCatalogService: CatalogService {
         process.standardInput = input
         process.standardOutput = output
         process.standardError = errors
+        let spawnStart = Date()
         try process.run()
+        Debug.log(String(format: "sidecar 启动 %.0fms", Date().timeIntervalSince(spawnStart) * 1000))
 
         self.process = process
         self.stdin = input.fileHandleForWriting
@@ -168,6 +170,7 @@ public actor SidecarCatalogService: CatalogService {
         let id = nextID
         nextID += 1
 
+        let sentAt = Date()
         var line: Data
         do {
             line = try JSONEncoder().encode(Envelope(id: id, method: method, args: args))
@@ -182,6 +185,7 @@ public actor SidecarCatalogService: CatalogService {
             Task { self.register(id: id, waiter: waiter, line: line) }
         }
 
+        Debug.log(String(format: "sidecar %@ %.0fms", method, Date().timeIntervalSince(sentAt) * 1000))
         let reply = try JSONDecoder().decode(Reply<T>.self, from: data)
         if let error = reply.error {
             switch error.code {

@@ -3,6 +3,7 @@ import SwiftUI
 /// App 入口。真正的 main 在可执行 target 的 main.swift 里。
 public struct HongguoPlayerApp: App {
     @StateObject private var app = AppModel()
+    @AppStorage("autoFitLandscape") private var autoFitLandscape = true
 
     public init() {}
 
@@ -20,6 +21,7 @@ public struct HongguoPlayerApp: App {
                     .keyboardShortcut("o")
             }
             CommandGroup(after: .sidebar) {
+                Toggle("横屏剧自动铺满屏幕", isOn: $autoFitLandscape)
                 Button("清理解密缓存") { app.clearMediaCache() }
                 Divider()
                 Button("返回片库") { app.path.removeAll() }
