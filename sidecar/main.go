@@ -157,6 +157,20 @@ func main() {
 			continue
 		}
 		result, callErr := dispatch(client, req)
+
+		// 匿名设备有额度：撞到 anonymous_limited 时自动换一台再试一次。
+		// 只重试一次——连续限流说明这台机器被针对了，继续换也没用。
+		if errors.Is(callErr, sdk.ErrAnonymousLimited) {
+			fmt.Fprintln(os.Stderr, "sidecar: 匿名设备额度用尽，换一台重试")
+			resetCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			resetErr := client.ResetDevice(resetCtx)
+			cancel()
+			if resetErr != nil {
+				fmt.Fprintf(os.Stderr, "sidecar: 换设备失败：%v\n", resetErr)
+			} else {
+				result, callErr = dispatch(client, req)
+			}
+		}
 		resp := response{ID: req.ID, Result: result}
 		if callErr != nil {
 			retryAfter := sdk.RetryAfter(callErr, 0)
@@ -183,11 +197,24 @@ func dispatch(c *sdk.Client, req request) (any, error) {
 		return map[string]any{"ok": true, "version": buildVersion()}, nil
 
 	case "discover":
-		p, err := c.Discover(ctx, sdk.DiscoverOptions{})
+		// args: [频道?, 游标?]；频道取 SDK 认识的名字（推荐/电影/剧集…）。
+		var channel, cursor string
+		if len(req.Args) > 0 {
+			_ = json.Unmarshal(req.Args[0], &channel)
+		}
+		if len(req.Args) > 1 {
+			_ = json.Unmarshal(req.Args[1], &cursor)
+		}
+		p, err := c.Discover(ctx, sdk.DiscoverOptions{Channel: channel, Cursor: cursor})
 		if err != nil {
 			return nil, err
 		}
 		return toPage(p), nil
+
+	case "channels":
+		return map[string]any{"channels": []string{
+			"推荐", "电影", "找剧", "经典", "真人剧", "漫剧", "大视听",
+		}}, nil
 
 	case "search":
 		var query string

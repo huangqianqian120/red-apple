@@ -370,6 +370,47 @@ do {
     }
 }
 
+section("无限流导航")
+do {
+    // 单部剧里正常往下走
+    checkEqual(
+        FeedNavigation.next(episodeIndex: 0, episodeCount: 5, feedIndex: 0, feedCount: 3, isFeedMode: false),
+        .episode(1), "非无限流：下一集"
+    )
+    checkEqual(
+        FeedNavigation.next(episodeIndex: 4, episodeCount: 5, feedIndex: 0, feedCount: 3, isFeedMode: false),
+        .end, "非无限流：最后一集就是结尾"
+    )
+    // 无限流：一部播完换下一部
+    checkEqual(
+        FeedNavigation.next(episodeIndex: 4, episodeCount: 5, feedIndex: 0, feedCount: 3, isFeedMode: true),
+        .series(1), "无限流：换下一部"
+    )
+    // 队列最后一部的最后一集
+    checkEqual(
+        FeedNavigation.next(episodeIndex: 4, episodeCount: 5, feedIndex: 2, feedCount: 3, isFeedMode: true),
+        .end, "无限流：队列见底"
+    )
+    // 上一部 / 上一集
+    checkEqual(
+        FeedNavigation.previous(episodeIndex: 2, feedIndex: 1, isFeedMode: true),
+        .episode(1), "无限流：上一集"
+    )
+    checkEqual(
+        FeedNavigation.previous(episodeIndex: 0, feedIndex: 1, isFeedMode: true),
+        .series(0), "无限流：换上一部"
+    )
+    checkEqual(
+        FeedNavigation.previous(episodeIndex: 0, feedIndex: 0, isFeedMode: true),
+        .end, "无限流：第一部第一集就是开头"
+    )
+    // 边界：空队列
+    checkEqual(
+        FeedNavigation.next(episodeIndex: 0, episodeCount: 0, feedIndex: 0, feedCount: 0, isFeedMode: false),
+        .end, "没有分集时不能前进"
+    )
+}
+
 // MARK: - sidecar 协议（需要 Go 编译出的二进制 + 网络）
 
 section("sidecar 协议")

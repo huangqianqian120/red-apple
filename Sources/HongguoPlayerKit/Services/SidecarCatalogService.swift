@@ -111,6 +111,15 @@ public actor SidecarCatalogService: CatalogService {
         return page.items.map(\.summaryModel)
     }
 
+    public func discoverPage(channel: String, cursor: String) async throws -> Page {
+        let payload: SeriesPage = try await call("discover", channel, cursor)
+        return Page(
+            items: payload.items.map(\.summaryModel),
+            cursor: payload.cursor ?? "",
+            hasMore: payload.hasMore
+        )
+    }
+
     public func search(_ query: String) async throws -> [SeriesSummary] {
         let page: SeriesPage = try await call("search", query)
         return page.items.map(\.summaryModel)
@@ -271,6 +280,7 @@ private struct ResetAck: Decodable {
 
 private struct SeriesPage: Decodable {
     var items: [SeriesPayload]
+    var cursor: String?
     var hasMore: Bool
 }
 

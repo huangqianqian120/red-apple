@@ -43,16 +43,39 @@ public final class PlaybackController: ObservableObject {
     @Published public var speed: Double = 1 { didSet { applySpeed() } }
     @Published public var autoplayNext = true
     @Published public private(set) var preparedFrom: String = ""
+    /// 服务端给的这一集总时长；边解边播时 AVPlayer 只知道自己已加载的部分，
+    /// 判断「是否真的播完」要用这个值。
+    private var expectedDuration: Double = 0
     /// 真实画面宽高比（来自 AVPlayerItem），用来把播放窗口调成合适的形状。
     @Published public private(set) var videoAspectRatio: CGFloat?
     /// 服务端对这个匿名设备返回了空结果：UI 该给一个「换设备」按钮。
     @Published public private(set) var needsDeviceReset = false
+
+    // MARK: 无限流状态
+
+    /// 刷剧队列：当前频道的短剧列表。
+    @Published public private(set) var feedQueue: [SeriesSummary] = []
+    @Published public private(set) var feedIndex: Int = 0
+    @Published public private(set) var feedChannel: String = ""
+    /// 下一页的游标；空表示没有更多。
+    @Published public private(set) var feedCursor: String = ""
+    private var feedHasMore = false
+    private var feedLoading = false
+
+    public var isFeedMode: Bool { !feedQueue.isEmpty }
+    public var feedPosition: String {
+        guard isFeedMode else { return "" }
+        return "第 \(feedIndex + 1)/\(feedQueue.count) 部 · \(feedChannel)"
+    }
 
     // MARK: 依赖
 
     public let player = AVPlayer()
     private let service: CatalogService
     private let preparer: MediaPreparer?
+    private let server: LocalMediaServer?
+    /// 当前这一集正在流式解密的计划（切集时用来停掉）。
+    private var currentStreamPlan: MediaPlan?
     private let progressStore: ProgressStore
     private let cacheDirectory: URL
 
@@ -67,11 +90,13 @@ public final class PlaybackController: ObservableObject {
         service: CatalogService,
         progressStore: ProgressStore,
         cacheDirectory: URL,
-        ffmpeg: URL?
+        ffmpeg: URL?,
+        server: LocalMediaServer? = nil
     ) {
         self.service = service
         self.progressStore = progressStore
         self.cacheDirectory = cacheDirectory
+        self.server = server
         self.preparer = ffmpeg.flatMap { try? MediaPreparer(cacheDirectory: cacheDirectory, ffmpeg: $0) }
         player.automaticallyWaitsToMinimizeStalling = true
         installObservers()
@@ -83,8 +108,24 @@ public final class PlaybackController: ObservableObject {
         episodes.indices.contains(index) ? episodes[index] : nil
     }
 
-    public var hasNext: Bool { index + 1 < episodes.count }
-    public var hasPrevious: Bool { index > 0 }
+    public var hasNext: Bool {
+        nextStep != .end
+    }
+
+    public var hasPrevious: Bool {
+        previousStep != .end
+    }
+
+    private var nextStep: FeedStep {
+        FeedNavigation.next(
+            episodeIndex: index, episodeCount: episodes.count,
+            feedIndex: feedIndex, feedCount: feedQueue.count, isFeedMode: isFeedMode
+        )
+    }
+
+    private var previousStep: FeedStep {
+        FeedNavigation.previous(episodeIndex: index, feedIndex: feedIndex, isFeedMode: isFeedMode)
+    }
 
     public var title: String {
         guard let episode = currentEpisode else { return series?.title ?? "未在播放" }
@@ -105,6 +146,27 @@ public final class PlaybackController: ObservableObject {
         startAt episodeNumber: Int? = nil,
         quality preferredQuality: String? = nil
     ) {
+        // 从片库直接点播：退出无限流。
+        feedQueue = []
+        feedIndex = 0
+        load(
+            seriesID: seriesID, fallbackTitle: fallbackTitle, startAt: episodeNumber,
+            preferredQuality: preferredQuality, keepFeed: false
+        )
+    }
+
+    /// 装载一部短剧。`keepFeed` 为 true 时不重置无限流队列（切剧用）。
+    private func load(
+        seriesID: String,
+        fallbackTitle: String,
+        startAt episodeNumber: Int?,
+        preferredQuality: String?,
+        keepFeed: Bool = false
+    ) {
+        if !keepFeed {
+            feedQueue = []
+            feedIndex = 0
+        }
         loadTask?.cancel()
         loadTask = Task { [weak self] in
             guard let self else { return }
@@ -131,6 +193,7 @@ public final class PlaybackController: ObservableObject {
                           let found = list.firstIndex(where: { $0.id == progress.episodeID }) {
                     startIndex = found
                 }
+                Debug.log("loaded \(info.title) episodes=\(list.count)")
                 self.index = startIndex
                 self.resumePosition = progress?.episodeID == list[startIndex].id
                     ? progress?.positionSeconds ?? 0 : 0
@@ -146,9 +209,10 @@ public final class PlaybackController: ObservableObject {
         }
     }
 
-    /// 直接播一个本地文件。用来在没有 SDK / 没有网络时验证播放器本身。
     public func openLocalFile(_ url: URL) {
         loadTask?.cancel()
+        feedQueue = []
+        feedIndex = 0
         series = nil
         episodes = []
         index = 0
@@ -172,6 +236,78 @@ public final class PlaybackController: ObservableObject {
             player.rate = Float(speed)
             isPlaying = true
             Task { await refreshDuration() }
+        }
+    }
+
+    // MARK: 无限流
+
+    /// 进入刷剧模式：从 items[startIndex] 开始，一集播完自动接下一部。
+    public func openFeed(_ items: [SeriesSummary], channel: String, startIndex: Int = 0) {
+        Debug.log("openFeed channel=\(channel) items=\(items.count) first=\(items.first?.title ?? "-")")
+        feedQueue = items
+        feedChannel = channel
+        feedIndex = min(max(startIndex, 0), max(items.count - 1, 0))
+        feedCursor = ""
+        feedHasMore = true
+        guard let first = items[safe: feedIndex] else { return }
+        load(seriesID: first.id, fallbackTitle: first.title, startAt: nil,
+             preferredQuality: nil, keepFeed: true)
+    }
+
+    /// 往队列尾部再补一页（滑到末尾时调用）。
+    public func requestMoreFeedIfNeeded() {
+        guard isFeedMode, !feedLoading, feedHasMore, feedIndex >= feedQueue.count - 3 else { return }
+        feedLoading = true
+        let channel = feedChannel
+        let cursor = feedCursor
+        Task { [service] in
+            let page = try? await service.discoverPage(channel: channel, cursor: cursor)
+            await MainActor.run {
+                self.feedLoading = false
+                guard let page else { return }
+                let known = Set(self.feedQueue.map(\.id))
+                let fresh = page.items.filter { !known.contains($0.id) }
+                self.feedQueue.append(contentsOf: fresh)
+                self.feedCursor = page.cursor
+                self.feedHasMore = page.hasMore
+            }
+        }
+    }
+
+    private func advanceFeed(to target: Int) {
+        Debug.log("advanceFeed -> \(target)")
+        guard isFeedMode, feedQueue.indices.contains(target) else {
+            requestMoreFeedIfNeeded()
+            return
+        }
+        stopCurrentStream(except: nil)
+        feedIndex = target
+        guard let summary = feedQueue[safe: target] else { return }
+        load(seriesID: summary.id, fallbackTitle: summary.title, startAt: nil,
+             preferredQuality: nil, keepFeed: true)
+        requestMoreFeedIfNeeded()
+    }
+
+    /// 预取某一部的第一集（无限流切剧用）。
+    public func prefetchFirstEpisode(of summary: SeriesSummary, after index: Int) {
+        guard let preparer, feedQueue.indices.contains(index) else { return }
+        let next = feedQueue[index]
+        prefetch(seriesID: next.id, episodeNumber: 1, using: preparer)
+    }
+
+    private func prefetch(seriesID: String, episodeNumber: Int, using preparer: MediaPreparer) {
+        let quality = quality
+        Task { [service] in
+            guard let episodes = try? await service.episodes(seriesID: seriesID),
+                  let episode = episodes.first(where: { $0.number == episodeNumber }),
+                  let playback = try? await service.playback(episodeID: episode.id),
+                  let stream = playback.select(quality: quality) else { return }
+            let plan = MediaPlan(
+                episodeID: episode.id, stream: stream, audioURL: playback.audioURL,
+                contentKey: playback.contentKey, durationSeconds: playback.durationSeconds,
+                quality: stream.definition
+            )
+            await preparer.prefetchStream(plan)
         }
     }
 
@@ -219,17 +355,31 @@ public final class PlaybackController: ObservableObject {
     // MARK: 集数切换
 
     public func next() {
-        guard hasNext else { return }
-        index += 1
-        resumePosition = 0
-        Task { await loadCurrentEpisode() }
+        switch nextStep {
+        case .episode(let target):
+            stopCurrentStream(except: nil)
+            index = target
+            resumePosition = 0
+            Task { await loadCurrentEpisode() }
+        case .series(let target):
+            advanceFeed(to: target)
+        case .end:
+            break
+        }
     }
 
     public func previous() {
-        guard hasPrevious else { return }
-        index -= 1
-        resumePosition = 0
-        Task { await loadCurrentEpisode() }
+        switch previousStep {
+        case .episode(let target):
+            stopCurrentStream(except: nil)
+            index = target
+            resumePosition = 0
+            Task { await loadCurrentEpisode() }
+        case .series(let target):
+            advanceFeed(to: target)
+        case .end:
+            break
+        }
     }
 
     public func play(episodeNumber: Int) {
@@ -307,7 +457,7 @@ public final class PlaybackController: ObservableObject {
         if let preparer, let cached = preparer.cachedEpisode(episode.id, quality: quality) {
             preparedFrom = "本地缓存"
             needsDeviceReset = false
-            NSLog("[hongguo] 命中缓存 %@", cached.lastPathComponent)
+            Debug.log("命中缓存 \(cached.lastPathComponent)")
             attach(url: cached, durationHint: 0)
             return
         }
@@ -355,18 +505,27 @@ public final class PlaybackController: ObservableObject {
                 }
                 phase = .preparing
                 preparedFrom = plan.stream.url.host() ?? "CDN"
-                target = try await preparer.prepare(plan) { [weak self] value in
-                    Task { @MainActor in self?.prepareProgress = value }
+                stopCurrentStream(except: plan)
+                // 先用边解边播（长片只等第一片），本地服务不可用时退回整集落盘。
+                if let server,
+                   let streaming = try? await preparer.startStream(plan, server: server) {
+                    target = streaming
+                    currentStreamPlan = plan
+                    configuredStreamHandler(preparer)
+                } else {
+                    target = try await preparer.prepare(plan) { [weak self] value in
+                        Task { @MainActor in self?.prepareProgress = value }
+                    }
+                    currentStreamPlan = nil
                 }
             } else {
+                stopCurrentStream(except: plan)
                 target = plan.stream.url
                 preparedFrom = plan.stream.url.host() ?? "CDN"
             }
 
+            expectedDuration = Double(playback.durationSeconds)
             attach(url: target, durationHint: Double(playback.durationSeconds))
-            if let preparer {
-                self.prefetchNext(using: preparer)
-            }
         } catch is CancellationError {
             // 切集时旧任务被取消，正常。
         } catch let error as CatalogError {
@@ -399,7 +558,31 @@ public final class PlaybackController: ObservableObject {
                 self.currentTime = max(start, 3)
             } else {
                 self.play()
+            self.scheduleSeekToEndIfRequested()
+            self.scheduleAutoNextIfRequested()
             }
+        }
+    }
+
+    /// 调试钩子：HONGGUO_AUTO_NEXT=<秒> 起播后 N 秒走一次 next()。
+    private func scheduleAutoNextIfRequested() {
+        guard let raw = ProcessInfo.processInfo.environment["HONGGUO_AUTO_NEXT"],
+              let delay = Double(raw) else { return }
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(delay, 0.5) * 1_000_000_000))
+            await MainActor.run { self?.next() }
+        }
+    }
+
+    /// 调试钩子：HONGGUO_AUTO_SEEK_END=<秒> 起播后跳到结尾，验证自动连播。
+    private func scheduleSeekToEndIfRequested() {
+        guard let raw = ProcessInfo.processInfo.environment["HONGGUO_AUTO_SEEK_END"],
+              let delay = Double(raw) else { return }
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(delay, 0.5) * 1_000_000_000))
+            guard let self, self.duration > 0 else { return }
+            self.seek(to: max(self.duration - 1.5, 0))
+            self.play()
         }
     }
 
@@ -416,25 +599,56 @@ public final class PlaybackController: ObservableObject {
         }
         if let value = try? await item.asset.load(.duration) {
             let seconds = value.seconds
-            if seconds.isFinite, seconds > 0 { duration = seconds }
+            // HLS event 播放列表的时长是递增的：只允许变长，不要缩回。
+            if seconds.isFinite, seconds > 0 { duration = max(duration, seconds) }
         }
     }
 
-    /// 后台把下一集解密好，切集时几乎瞬开。
-    private func prefetchNext(using preparer: MediaPreparer) {
-        guard autoplayNext, hasNext else { return }
+    /// 某一集的流式解密结束时，顺手预取下一集。
+    ///
+    /// 只在上一集解完之后开始：两个 ffmpeg 同时跑会抢带宽，反而拖慢起播。
+    private func configuredStreamHandler(_ preparer: MediaPreparer) {
+        Task { [weak self] in
+            await preparer.setStreamFinishedHandler { [weak self] directoryName in
+                Task { @MainActor in self?.prefetchNextAfterStream(directoryName) }
+            }
+        }
+    }
+
+    private func prefetchNextAfterStream(_ directoryName: String) {
+        guard currentStreamPlan?.streamDirectoryName == directoryName else { return }
+        if let feedSeries = feedQueue[safe: feedIndex] {
+            // 无限流：这一部快播完了就预取下一部的第一集，切剧不等待。
+            if !hasNext {
+                prefetchFirstEpisode(of: feedSeries, after: feedIndex + 1)
+                return
+            }
+        }
+        guard autoplayNext, hasNext, let preparer else { return }
         let next = episodes[index + 1]
+        prefetch(episode: next, using: preparer)
+    }
+
+    private func prefetch(episode: Episode, using preparer: MediaPreparer) {
         let quality = quality
         Task { [service] in
-            guard let playback = try? await service.playback(episodeID: next.id),
+            guard let playback = try? await service.playback(episodeID: episode.id),
                   let stream = playback.select(quality: quality) else { return }
             let plan = MediaPlan(
-                episodeID: next.id, stream: stream, audioURL: playback.audioURL,
+                episodeID: episode.id, stream: stream, audioURL: playback.audioURL,
                 contentKey: playback.contentKey, durationSeconds: playback.durationSeconds,
                 quality: stream.definition
             )
-            await preparer.prefetch(plan)
+            await preparer.prefetchStream(plan)
         }
+    }
+
+    private func stopCurrentStream(except plan: MediaPlan?) {
+        guard let preparer, let previous = currentStreamPlan,
+              previous.streamDirectoryName != plan?.streamDirectoryName else { return }
+        let stopping = previous
+        Task { await preparer.stopStream(stopping) }
+        currentStreamPlan = nil
     }
 
     // MARK: 观察
@@ -470,6 +684,39 @@ public final class PlaybackController: ObservableObject {
     }
 
     private func handleEpisodeFinished() {
+        // 边解边播时 AVPlayer 会追平已解出的分片：那不是播完，是等下一片。
+        if let plan = currentStreamPlan, let preparer {
+            let name = plan.streamDirectoryName
+            // 服务端时长已知时以它为准：追平已加载分片 ≠ 播完。
+            let reachedEnd = expectedDuration <= 0 || currentTime >= expectedDuration - 3
+            if !reachedEnd {
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    guard let self, self.currentStreamPlan?.streamDirectoryName == name else { return }
+                    self.seek(to: max(self.currentTime - 0.3, 0))
+                    self.play()
+                }
+                return
+            }
+            Task { [weak self] in
+                let complete = await MainActor.run { preparer.isStreamComplete(name) }
+                guard let self else { return }
+                if complete {
+                    self.finishEpisodeAndAdvance()
+                } else {
+                    // 等 ffmpeg 再产出至少一片，然后从那一片接着播。
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    guard self.currentStreamPlan?.streamDirectoryName == name else { return }
+                    self.seek(to: max(self.currentTime - 0.3, 0))
+                    self.play()
+                }
+            }
+            return
+        }
+        finishEpisodeAndAdvance()
+    }
+
+    private func finishEpisodeAndAdvance() {
         guard let series, let episode = currentEpisode else { return }
         let hasNext = self.hasNext
         let nextEpisode = hasNext ? episodes[index + 1] : nil
@@ -521,6 +768,7 @@ public final class PlaybackController: ObservableObject {
     }
 
     private func fail(_ message: String) {
+        Debug.log("fail: \(message)")
         phase = .failed(message)
         isPlaying = false
         player.pause()

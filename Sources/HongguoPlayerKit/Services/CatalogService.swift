@@ -20,13 +20,36 @@ public protocol CatalogService: Sendable {
     func playback(episodeID: String) async throws -> PlaybackInfo
     func shortRank() async throws -> [RankEntry]
 
+    /// 拉一页频道内容（无限流用）。cursor 为空表示第一页。
+    func discoverPage(channel: String, cursor: String) async throws -> Page
+
     /// 丢弃当前匿名设备并重新注册。服务端给匿名设备返回空结果
     /// （ErrAnonymousLimited）时是唯一有效的补救措施。
     func resetDevice() async throws
 }
 
+/// 分页结果。
+public struct Page: Sendable {
+    public var items: [SeriesSummary]
+    public var cursor: String
+    public var hasMore: Bool
+
+    public init(items: [SeriesSummary] = [], cursor: String = "", hasMore: Bool = false) {
+        self.items = items
+        self.cursor = cursor
+        self.hasMore = hasMore
+    }
+}
+
 extension CatalogService {
     public func resetDevice() async throws {}
+
+    /// 默认实现：只有第一页。演示数据源用它就够了。
+    public func discoverPage(channel: String, cursor: String) async throws -> Page {
+        guard cursor.isEmpty else { return Page() }
+        let items = try await discover()
+        return Page(items: items, cursor: "", hasMore: false)
+    }
 }
 
 public enum CatalogError: LocalizedError, Sendable {

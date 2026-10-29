@@ -8,6 +8,7 @@ import SwiftUI
 @MainActor
 public final class AppModel: ObservableObject {
     public enum Section: String, CaseIterable, Identifiable {
+        case feed = "刷剧"
         case discover = "推荐"
         case rank = "短剧榜"
         case search = "搜索"
@@ -17,6 +18,7 @@ public final class AppModel: ObservableObject {
 
         public var systemImage: String {
             switch self {
+            case .feed: return "play.rectangle.on.rectangle"
             case .discover: return "square.grid.2x2"
             case .rank: return "flame"
             case .search: return "magnifyingglass"
@@ -42,6 +44,7 @@ public final class AppModel: ObservableObject {
     @Published public var presented: Presented?
 
     public let catalog: CatalogService
+    private let mediaServer: LocalMediaServer?
     public let playback: PlaybackController
     public let cacheDirectory: URL
     private let progressStore: ProgressStore
@@ -69,8 +72,12 @@ public final class AppModel: ObservableObject {
         self.ffmpegPath = ffmpeg?.path
         self.serviceDescription = service.describe
         self.isLive = service.isLive
+        // 本地 HTTP 服务：把 ffmpeg 边解边写的 HLS 分片喂给 AVPlayer。
+        let server = try? LocalMediaServer(root: mediaCache)
+        self.mediaServer = server
         self.playback = PlaybackController(
-            service: service, progressStore: store, cacheDirectory: mediaCache, ffmpeg: ffmpeg
+            service: service, progressStore: store, cacheDirectory: mediaCache,
+            ffmpeg: ffmpeg, server: server
         )
 
         // 退出时收掉 sidecar 子进程，别留孤儿。
@@ -117,6 +124,20 @@ public final class AppModel: ObservableObject {
         playback.open(seriesID: seriesID, fallbackTitle: title, startAt: episodeNumber)
     }
 
+    /// 进入无限流刷剧：拉这个频道的第一页，然后一集接一集往下播。
+    public func startFeed(channel: String) {
+        presented = Presented(seriesID: "", title: "刷剧 · \(channel)", episodeNumber: nil)
+        openPlayerWindow?()
+        Task {
+            let page = (try? await catalog.discoverPage(channel: channel, cursor: "")) ?? Page()
+            guard !page.items.isEmpty else {
+                playback.openFeed([], channel: channel)
+                return
+            }
+            playback.openFeed(page.items, channel: channel)
+        }
+    }
+
     public func closePlayer() {
         playback.persistProgress()
         playback.pause()
@@ -150,6 +171,14 @@ public final class AppModel: ObservableObject {
         let seriesID = String(parts[0])
         let episode = parts.count > 1 ? Int(parts[1]) : nil
         play(seriesID: seriesID, title: seriesID, episodeNumber: episode)
+    }
+
+    /// 冒烟测试/深链接：HONGGUO_FEED=<频道> 启动即进无限流。
+    public func feedIfRequested() {
+        guard presented == nil,
+              let channel = ProcessInfo.processInfo.environment["HONGGUO_FEED"],
+              !channel.isEmpty else { return }
+        startFeed(channel: channel)
     }
 
     public func openLocalFile() {

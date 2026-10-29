@@ -44,6 +44,11 @@ public struct MediaPlan: Sendable, Hashable {
         return "\(safeEpisode)_\(safeQuality).mp4"
     }
 
+    /// HLS 目录名：和缓存文件同源（分集 + 清晰度），方便一起清理。
+    public var streamDirectoryName: String {
+        String(cacheKey.dropLast(".mp4".count))
+    }
+
     /// 交给 AVPlayer 的地址：需要处理时是缓存文件，否则是 CDN 地址。
     public func playableURL(cacheDirectory: URL) -> URL {
         needsProcessing
@@ -67,6 +72,9 @@ public actor MediaPreparer {
     private let cacheDirectory: URL
     private let ffmpeg: URL
     private var inFlight: [String: Task<URL, Error>] = [:]
+    /// 边解边播的 ffmpeg 进程，按 HLS 目录名索引。
+    private var streams: [String: Process] = [:]
+    private var onStreamFinished: (@Sendable (String) -> Void)?
 
     public init(cacheDirectory: URL, ffmpeg: URL) throws {
         self.cacheDirectory = cacheDirectory
@@ -189,6 +197,210 @@ public actor MediaPreparer {
             let l = (try? lhs.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             let r = (try? rhs.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
             return l < r
+        }
+    }
+
+    // MARK: 边解边播（HLS）
+
+    /// 启动 ffmpeg 写 HLS 分片，返回可以立刻交给 AVPlayer 的地址。
+    ///
+    /// 相比 prepare()（整集落盘后才播），这里只等第一片就返回：
+    /// 长片（90 分钟电影）不再需要等一两分钟，短剧也更快。
+    /// 已经完整缓存过的返回现成 playlist（含 ENDLIST）。
+    public func startStream(_ plan: MediaPlan, server: LocalMediaServer) async throws -> URL {
+        guard plan.needsProcessing else { return plan.stream.url }
+        let directory = cacheDirectory
+            .appendingPathComponent("hls", isDirectory: true)
+            .appendingPathComponent(plan.streamDirectoryName, isDirectory: true)
+        let playlist = directory.appendingPathComponent("playlist.m3u8")
+        let relative = "hls/\(plan.streamDirectoryName)/playlist.m3u8"
+
+        if FileManager.default.fileExists(atPath: playlist.path),
+           let text = try? String(contentsOf: playlist, encoding: .utf8),
+           text.contains("#EXT-X-ENDLIST") {
+            return server.url(for: relative)  // 完整缓存，直接播
+        }
+        // 预取已经在解这一集：直接等它的第一片，别重复起进程。
+        if streams[plan.streamDirectoryName] == nil {
+            // 上次中断的半成品没有守护进程，清掉重来。
+            try? FileManager.default.removeItem(at: directory)
+        }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        if streams[plan.streamDirectoryName] != nil {
+            return try await waitForFirstSegment(directory: directory, relative: relative, server: server)
+        }
+
+        let process = Process()
+        process.executableURL = ffmpeg
+        process.arguments = Self.hlsArguments(for: plan, directory: directory)
+        let logURL = directory.appendingPathComponent("ffmpeg.log")
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        let log = try FileHandle(forWritingTo: logURL)
+        process.standardError = log
+        process.standardOutput = FileHandle.nullDevice
+        try process.run()
+        streams[plan.streamDirectoryName] = process
+        process.terminationHandler = { [weak self] _ in
+            Task { await self?.streamFinished(plan.streamDirectoryName) }
+        }
+
+        // 等「playlist 有了 + 至少一个非空分片」就返回，起播只等这一片。
+        let deadline = Date().addingTimeInterval(25)
+        while Date() < deadline {
+            if let text = try? String(contentsOf: playlist, encoding: .utf8),
+               text.contains("#EXTINF"),
+               Self.firstSegmentReady(in: directory) {
+                return server.url(for: relative)
+            }
+            if !process.isRunning {
+                let tail = Self.tail(of: logURL) ?? ""
+                throw Failure(message: "解密流启动失败：\(tail.isEmpty ? "ffmpeg 已退出" : tail)")
+            }
+            try? await Task.sleep(nanoseconds: 120_000_000)
+        }
+        process.terminate()
+        streams[plan.streamDirectoryName] = nil
+        throw Failure(message: "解密流超时（25 秒内没有产出分片）")
+    }
+
+    private func waitForFirstSegment(
+        directory: URL, relative: String, server: LocalMediaServer
+    ) async throws -> URL {
+        let playlist = directory.appendingPathComponent("playlist.m3u8")
+        let deadline = Date().addingTimeInterval(25)
+        while Date() < deadline {
+            if let text = try? String(contentsOf: playlist, encoding: .utf8),
+               text.contains("#EXTINF"),
+               Self.firstSegmentReady(in: directory) {
+                return server.url(for: relative)
+            }
+            try? await Task.sleep(nanoseconds: 120_000_000)
+        }
+        throw Failure(message: "解密流超时（25 秒内没有产出分片）")
+    }
+
+    /// 预取：只启动 ffmpeg，不等进度。切集时 startStream 会接上同一个进程。
+    public func prefetchStream(_ plan: MediaPlan) {
+        guard plan.needsProcessing, streams[plan.streamDirectoryName] == nil else { return }
+        let directory = cacheDirectory
+            .appendingPathComponent("hls", isDirectory: true)
+            .appendingPathComponent(plan.streamDirectoryName, isDirectory: true)
+        let playlist = directory.appendingPathComponent("playlist.m3u8")
+        if let text = try? String(contentsOf: playlist, encoding: .utf8),
+           text.contains("#EXT-X-ENDLIST") {
+            return  // 已经完整缓存
+        }
+        try? FileManager.default.removeItem(at: directory)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let process = Process()
+        process.executableURL = ffmpeg
+        process.arguments = Self.hlsArguments(for: plan, directory: directory)
+        process.standardError = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return
+        }
+        streams[plan.streamDirectoryName] = process
+        process.terminationHandler = { [weak self] _ in
+            Task { await self?.streamFinished(plan.streamDirectoryName) }
+        }
+    }
+
+    /// 某一集的 ffmpeg 结束（正常写完或被终止）。
+    private func streamFinished(_ directoryName: String) {
+        streams[directoryName] = nil
+        let handler = onStreamFinished
+        onStreamFinished = nil
+        handler?(directoryName)
+    }
+
+    /// 某一集的流式解密结束时的回调（控制器用它接着预取下一集）。
+    public func setStreamFinishedHandler(_ handler: (@Sendable (String) -> Void)?) {
+        onStreamFinished = handler
+    }
+
+    /// 这一集的 HLS 是否已经写完整（playlist 里有 ENDLIST）。
+    ///
+    /// 边解边播时 AVPlayer 会追平「已解出来的分片」并发出「播完」通知，
+    /// 那不是真的播完，只是在等后面的分片。
+    public nonisolated func isStreamComplete(_ directoryName: String) -> Bool {
+        let playlist = cacheDirectory
+            .appendingPathComponent("hls", isDirectory: true)
+            .appendingPathComponent(directoryName, isDirectory: true)
+            .appendingPathComponent("playlist.m3u8")
+        guard let text = try? String(contentsOf: playlist, encoding: .utf8) else { return false }
+        return text.contains("#EXT-X-ENDLIST")
+    }
+
+    /// 停止某一集的流式解密（关窗、切集时调用）。
+    public func stopStream(_ plan: MediaPlan) {
+        if let process = streams.removeValue(forKey: plan.streamDirectoryName), process.isRunning {
+            process.terminate()
+        }
+    }
+
+    public func stopAllStreams() {
+        for (_, process) in streams where process.isRunning {
+            process.terminate()
+        }
+        streams.removeAll()
+    }
+
+    /// HLS 模式的 ffmpeg 参数。
+    ///
+    /// - `-c copy`：不重编码，解密后直接切段；
+    /// - `hls_time 4`：4 秒一片，起播等一片就够；
+    /// - `event`：播放列表只追加，AVPlayer 会继续轮询新的分片；
+    /// - `fmp4`：HEVC 用 fMP4 分片，AVPlayer 支持最好。
+    public static func hlsArguments(for plan: MediaPlan, directory: URL) -> [String] {
+        var args = ["-hide_banner", "-loglevel", "warning", "-nostdin", "-nostats"]
+        let key = plan.contentKey.trimmingCharacters(in: .whitespaces)
+        if !key.isEmpty {
+            args += ["-decryption_key", key]
+        }
+        if plan.stream.hls {
+            args += ["-allowed_extensions", "ALL"]
+        }
+        args += ["-i", plan.stream.url.absoluteString]
+        if let audio = plan.audioURL {
+            if !key.isEmpty {
+                args += ["-decryption_key", key]
+            }
+            args += ["-i", audio.absoluteString]
+            args += ["-map", "0:v:0", "-map", "1:a:0?"]
+        } else {
+            args += ["-map", "0:v:0?", "-map", "0:a:0?"]
+        }
+        args += [
+            "-c", "copy",
+            "-f", "hls",
+            "-hls_time", "4",
+            "-hls_playlist_type", "event",
+            "-hls_segment_type", "fmp4",
+            "-hls_flags", "independent_segments",
+            "-hls_fmp4_init_filename", "init.mp4",
+            "-hls_segment_filename", directory.appendingPathComponent("seg%05d.m4s").path,
+            directory.appendingPathComponent("playlist.m3u8").path,
+        ]
+        return args
+    }
+
+    public nonisolated func streamURL(for plan: MediaPlan, server: LocalMediaServer) -> URL {
+        server.url(for: "hls/\(plan.streamDirectoryName)/playlist.m3u8")
+    }
+
+    private static func firstSegmentReady(in directory: URL) -> Bool {
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.fileSizeKey]
+        )) ?? []
+        return files.contains { file in
+            guard file.pathExtension == "m4s" else { return false }
+            let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            return size > 0
         }
     }
 

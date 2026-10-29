@@ -11,13 +11,17 @@
 | 部分 | 状态 |
 |---|---|
 | 真片库 / 搜索 / 榜单 / 详情 | ✅ 接真 API，封面（含 HEIC）正常 |
-| 播放加密分集 | ✅ 真实剧集 720p 解密播放，画面/字幕/进度正常 |
-| 解密缓存 + 下一集预取 | ✅ 二次播放 6 秒内出画面，第 2 集已后台备好 |
+| 播放加密分集 | ✅ 播真实剧集，画面/字幕/进度正常 |
+| **边解边播（本地 HLS）** | ✅ 首片就播，长片不再等整集落盘 |
+| **横屏长片** | ✅ 《僵尸先生》97 分钟、DASH 分片 + 独立音轨，实测可播 |
+| **无限流刷剧** | ✅ 一集接一集、一部接一部，队列见底自动补页 |
+| 解密缓存 + 下一集预取 | ✅ 二次播放 6 秒内出画面，下一集后台备好 |
 | 进度记忆 / 断点续播 | ✅ 自测覆盖，落盘 JSON |
-| 横屏长片 / 竖屏短剧窗口适配 | ✅ 按真实分辨率自动切换 16:9 / 9:16 |
-| 匿名设备被限流 | ✅ 报错可一键「换一台匿名设备并重试」 |
+| 横屏/竖屏窗口适配 | ✅ 按真实分辨率自动切换 16:9 / 9:16 |
+| 匿名设备被限流 | ✅ sidecar 自动换设备重试一次，UI 也能手动换 |
 
-自测：`swift run selftest` → **68/68 通过**（含真实 ffmpeg cenc 往返、真实 API 往返）。
+自测：`swift run selftest` → **81/81 通过**（含真实 ffmpeg cenc 往返、真实 API 往返、
+无限流导航边界）。
 
 ## 快速开始
 
@@ -68,6 +72,18 @@ echo '{"id":1,"method":"search","args":["末世"]}' | ./build/openhongguo-sideca
 `Package.swift` 里还留着 in-process 绑定的位置（`#if canImport(Openhongguo)`）：
 装上完整 Xcode 后跑 `Scripts/enable-sdk.sh` 就会优先用 in-process 版本。
 
+## 无限流刷剧
+
+侧边栏「刷剧」选频道（推荐 / 电影 / 经典 / 真人剧 / 漫剧 / 大视听），进播放器后：
+
+- 一集播完 → 下一集；**一部播完 → 下一部**（自动装载新剧、从第 1 集开始）
+- 队列剩 3 部时后台自动拉下一车内容，可以一直刷
+- 上一集解码结束后才预取下一集，避免两个 ffmpeg 抢带宽
+- 顶栏显示「第 N/M 部 · 频道」，最后一集时出现「下一部」按钮
+
+跨集 / 跨剧 / 到头的判定抽成了纯函数 `FeedNavigation`，8 条边界都有测试
+（这类 off-by-one 一旦写错就是「连着连着卡住」，很难在 UI 上复现）。
+
 ## 播放链路
 
 服务端给的流有三种形态，决定了播放器怎么做：
@@ -75,8 +91,16 @@ echo '{"id":1,"method":"search","args":["末世"]}' | ./build/openhongguo-sideca
 | 形态 | 处理 |
 |---|---|
 | 明文单文件 MP4 | 直接把 URL 交给 AVPlayer，不落盘 |
-| 加密单文件（cenc-aes-ctr） | ffmpeg `-decryption_key` + `-c copy` → 本地明文 MP4 |
+| 加密单文件（cenc-aes-ctr） | ffmpeg `-decryption_key` + `-c copy` → 本地明文 MP4，或直接切 HLS |
 | byte-range DASH + 独立音轨 | ffmpeg 双输入各带 key + `-map` 拼成一路 |
+
+解密有两条路，起播优先走第一条：
+
+1. **边解边播（HLS）**：`ffmpeg -f hls -hls_time 4 -hls_playlist_type event` 把解密后的
+   数据切成 fMP4 分片，App 起一个 `127.0.0.1` 的最小 HTTP 服务，AVPlayer 逐段拉。
+   只等第一片（约 2 秒）就能出画面，播完的分片留在磁盘上，下次直接命中。
+2. **整集落盘**：HLS 起不来（或本地服务端口失败）时退回老路——整集 decrypt 成 mp4，
+   校验解码一帧后播放。
 
 ```
 sidecar: resolvePlayback ──▶ 选清晰度 ──▶ MediaPlan（地址 + key + 时长）
@@ -107,14 +131,14 @@ sidecar: resolvePlayback ──▶ 选清晰度 ──▶ MediaPlan（地址 + k
 | 场景 | 结果 |
 |---|---|
 | `discover`（推荐页） | ~2s，封面 HEIC 正常解码 |
-| 竖屏短剧 720p 单集 | 4.8MB，解密+落盘 **12s** |
-| 横屏短剧 720p 单集 | 21MB，**40s** |
-| 横屏短剧 1080p 单集 | 38MB，~25s |
-| 缓存命中后起播 | **6s**（App 启动 → 出画面） |
-| 下一集预取 | 起播后自动完成，切集瞬开 |
+| 竖屏短剧 720p 单集 | 4.8MB，整集落盘 12s → **HLS 起播 2~3s** |
+| 横屏短剧 720p 单集 | 21MB，整集落盘 40s → **HLS 起播 2~3s** |
+| 横屏电影 720p（97 分钟） | DASH + 独立音轨，**HLS 起播 2~3s**，边看边解 |
+| 缓存命中后起播 | **6s**（App 启动 → 出画面，含 API） |
+| 下一集 / 下一部预取 | 上一集解完后自动进行，切集基本瞬开 |
 
-起播等待 = 整集下载 + 解密，这是 AVPlayer 不能解 cenc 的代价。下一步做
-「ffmpeg 边解边写本地 HLS + 127.0.0.1 服务」，目标首帧 < 5 秒。
+从「App 启动到 HLS 首片」实测 12s，其中约 9s 花在 API（`episodes` 一次返回 1000 集）
+而不是解密。下一步优化：剧集列表分页 + 先起播再补列表。
 
 ## 结构
 
@@ -169,8 +193,25 @@ sidecar/main.go                   Go 侧的 JSON 服务
 | `HONGGUO_OPEN_FILE=/path.mp4` | 启动即播放本地文件 |
 | `HONGGUO_PAUSE_ON_OPEN=1` | 打开后暂停在第 3 秒（截图/看控件用） |
 | `HONGGUO_FORCE_DEMO=1` | 强制离线演示数据 |
+| `HONGGUO_FEED=<频道>` | 启动即进无限流（如 `电影`） |
+| `HONGGUO_AUTO_NEXT=<秒>` | 起播 N 秒后走一次「下一集/下一部」 |
+| `HONGGUO_AUTO_SEEK_END=<秒>` | 起播 N 秒后跳到结尾，验证自动连播 |
+| `HONGGUO_DEBUG=1` | 打开诊断日志（默认安静） |
 | `HONGGUO_SIDECAR=/path` | 指定 sidecar 二进制 |
 | `HONGGUO_FFMPEG=/path/ffmpeg` | 指定 ffmpeg |
+
+## 自己踩到的坑（都是跑起来才暴露的）
+
+1. **HLS 追平分片会被当成「播完」**：边解边播时 AVPlayer 播到已解出的最后一个分片就会发
+   `AVPlayerItemDidPlayToEndTime`，一开始直接触发「下一部」，电影 13 秒就跳到第二部。
+   现在用服务端给的时长判定：`currentTime >= 总时长 - 3` 才算播完，否则等新分片续播。
+2. **观测不到另一个 ObservableObject**：播放窗口用 `app.playback.phase` 判断显示内容，
+   但 `playback` 是独立的 `ObservableObject`，视图不会因它变化重绘，于是永远停在
+   「没有在播放」。改成看 `presented`（AppModel 自己的 `@Published`）。
+3. **默认清晰度必须在选流之前定**：原先在 `select()` 之后才把 quality 改成 720p，
+   结果标签写 720p、实际下 1080p（38MB）。
+4. **`vertical` 字段不可靠**：`vertical=false` 的剧集实际可能是 16:9 长片，
+   窗口尺寸以 `AVPlayerItem.presentationSize` 为准。
 
 ## 上游 SDK 踩到的坑
 

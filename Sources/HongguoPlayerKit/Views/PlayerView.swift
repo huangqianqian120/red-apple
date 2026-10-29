@@ -210,13 +210,36 @@ struct PlayerView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(controller.series?.title ?? app.presented?.title ?? "播放中")
                     .font(.system(size: 13, weight: .semibold))
-                Text(controller.currentEpisode?.displayTitle ?? "")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.65))
+                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(controller.currentEpisode?.displayTitle ?? "")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.65))
+                    if controller.isFeedMode {
+                        Text(controller.feedPosition)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.white.opacity(0.45))
+                        if !controller.hasNext {
+                            Text("· 即将换下一部")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.yellow.opacity(0.8))
+                        }
+                    }
+                }
             }
             Spacer()
             if let host = Optional(controller.preparedFrom), !host.isEmpty, controller.phase == .ready {
                 Text(host).font(.system(size: 10)).foregroundStyle(.white.opacity(0.4))
+            }
+            if controller.isFeedMode, controller.hasNext, controller.index + 1 >= controller.episodes.count {
+                Button {
+                    controller.next()
+                } label: {
+                    Label("下一部", systemImage: "forward.end.alt.fill")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .help("直接跳下一部")
             }
             Button {
                 showsEpisodes.toggle()

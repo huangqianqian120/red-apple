@@ -12,29 +12,35 @@ public struct PlayerWindowView: View {
 
     public var body: some View {
         Group {
-            switch app.playback.phase {
-            case .idle:
+            // 看 presented（AppModel 自己的 @Published）而不是 playback.phase：
+            // phase 在另一个 ObservableObject 里，这个视图观察不到它，
+            // 用 phase 判断会永远停在初始状态。
+            if app.presented != nil {
+                PlayerView(controller: app.playback)
+            } else {
                 ContentUnavailableView(
                     "没有在播放",
                     systemImage: "play.slash",
                     description: Text("从片库或搜索页选一部短剧开始播放。")
                 )
-            default:
-                PlayerView(controller: app.playback)
             }
         }
         .ephemeralWindow()
         .frame(minWidth: 300, minHeight: 420)
         .background(Color.black)
         .preferredColorScheme(.dark)
+        .onAppear { Debug.log("PlayerWindow onAppear") }
         .task {
             // 启动时被状态恢复出来的空播放窗口：自己关掉，别留个死窗口。
-            if case .idle = app.playback.phase {
-                try? await Task.sleep(nanoseconds: 120_000_000)
-                if case .idle = app.playback.phase { dismissWindow() }
+            // 注意要同时看 presented：无限流/点播是先把窗口打开、再去请求数据，
+            // 只看 phase 会把正在等数据的窗口误杀。
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            if app.presented == nil, case .idle = app.playback.phase {
+                dismissWindow()
             }
         }
         .onDisappear {
+            Debug.log("PlayerWindow onDisappear")
             // 用户关窗就等于停止播放，把进度落盘。
             app.closePlayer()
         }

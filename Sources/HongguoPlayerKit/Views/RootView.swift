@@ -28,6 +28,7 @@ public struct RootView: View {
             app.openPlayerWindow = { openWindow(id: "player") }
             await app.refreshProgress()
             app.autoPlayIfRequested()
+            app.feedIfRequested()
             app.openDebugFileIfRequested()
         }
         .onChange(of: selection) { _, newValue in
@@ -39,6 +40,7 @@ public struct RootView: View {
     @ViewBuilder
     private var content: some View {
         switch app.section {
+        case .feed: FeedView()
         case .discover: DiscoverView()
         case .rank: RankView()
         case .search: SearchView()

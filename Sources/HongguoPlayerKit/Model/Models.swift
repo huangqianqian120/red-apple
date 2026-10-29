@@ -198,3 +198,11 @@ public struct RankEntry: Identifiable, Hashable, Sendable {
         self.episodeCount = episodeCount
     }
 }
+
+
+extension Array {
+    /// 越界返回 nil 的下标，读列表时省掉一堆 bounds 判断。
+    public subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}
