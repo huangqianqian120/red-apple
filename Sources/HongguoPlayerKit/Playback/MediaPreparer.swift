@@ -162,6 +162,36 @@ public actor MediaPreparer {
         }
     }
 
+    /// 已经落盘的某一集：优先精确匹配清晰度，其次任意清晰度。
+    ///
+    /// 有缓存时播放器可以完全不碰网络——限流、断网、服务端改版都能继续看。
+    public nonisolated func cachedEpisode(_ episodeID: String, quality: String = "") -> URL? {
+        let safe = episodeID.replacingOccurrences(
+            of: "[^A-Za-z0-9._-]", with: "_", options: .regularExpression
+        )
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: cacheDirectory, includingPropertiesForKeys: nil
+        )) ?? []
+        let candidates = files.filter { $0.lastPathComponent.hasPrefix(safe + "_") }
+        guard !candidates.isEmpty else { return nil }
+        if !quality.isEmpty {
+            let safeQuality = quality.replacingOccurrences(
+                of: "[^A-Za-z0-9._-]", with: "_", options: .regularExpression
+            )
+            if let exact = candidates.first(where: {
+                $0.deletingPathExtension().lastPathComponent == "\(safe)_\(safeQuality)"
+            }) {
+                return exact
+            }
+        }
+        // 任意清晰度：文件大的优先（画质更好）。
+        return candidates.max { lhs, rhs in
+            let l = (try? lhs.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            let r = (try? rhs.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            return l < r
+        }
+    }
+
     /// 丢掉某一集的缓存文件（切清晰度回来时不需要重下，但换设备档案要清）。
     public func evict(_ plan: MediaPlan) {
         try? FileManager.default.removeItem(at: plan.playableURL(cacheDirectory: cacheDirectory))

@@ -303,6 +303,15 @@ public final class PlaybackController: ObservableObject {
         player.pause()
         isPlaying = false
 
+        // 缓存优先：已经解密过的集不碰网络。限流、断网、服务端改版都能继续看。
+        if let preparer, let cached = preparer.cachedEpisode(episode.id, quality: quality) {
+            preparedFrom = "本地缓存"
+            needsDeviceReset = false
+            NSLog("[hongguo] 命中缓存 %@", cached.lastPathComponent)
+            attach(url: cached, durationHint: 0)
+            return
+        }
+
         do {
             let playback = try await service.playback(episodeID: episode.id)
             availableQualities = Self.qualityOptions(for: playback)

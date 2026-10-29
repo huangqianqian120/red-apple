@@ -335,6 +335,41 @@ if let ffmpeg = MediaPreparer.locateFFmpeg() {
     print("  跳过（未找到 ffmpeg）")
 }
 
+section("缓存查找")
+do {
+    if let ffmpeg = MediaPreparer.locateFFmpeg() {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("hongguo-cache-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let prep = try MediaPreparer(cacheDirectory: directory, ffmpeg: ffmpeg)
+
+        let touch = { (name: String, size: Int) in
+            let url = directory.appendingPathComponent(name)
+            FileManager.default.createFile(atPath: url.path, contents: Data(count: size))
+        }
+        touch("ep-1_720p.mp4", 500)
+        touch("ep-1_1080p.mp4", 900)
+        touch("ep-2_720p.mp4", 100)
+
+        checkEqual(
+            prep.cachedEpisode("ep-1", quality: "720p")?.lastPathComponent, "ep-1_720p.mp4",
+            "精确匹配清晰度"
+        )
+        checkEqual(
+            prep.cachedEpisode("ep-1")?.lastPathComponent, "ep-1_1080p.mp4",
+            "没指定清晰度时挑体积大的"
+        )
+        checkEqual(
+            prep.cachedEpisode("ep-2", quality: "1080p")?.lastPathComponent, "ep-2_720p.mp4",
+            "指定清晰度不存在时退回已有的一份"
+        )
+        check(prep.cachedEpisode("ep-3") == nil, "没有缓存时返回 nil")
+        check(prep.cachedEpisode("ep-1", quality: "480p") != nil, "480p 未缓存也能用 720p 顶上")
+    } else {
+        print("  跳过（未找到 ffmpeg）")
+    }
+}
+
 // MARK: - sidecar 协议（需要 Go 编译出的二进制 + 网络）
 
 section("sidecar 协议")
